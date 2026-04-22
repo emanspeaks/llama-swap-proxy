@@ -69,7 +69,7 @@ type ProxyModelEntry struct {
 }
 
 type ProxyModelsResponse struct {
-	Object string           `json:"object"`
+	Object string            `json:"object"`
 	Data   []ProxyModelEntry `json:"data"`
 }
 
@@ -240,9 +240,9 @@ func newReverseProxy(target string) (*httputil.ReverseProxy, error) {
 }
 
 func main() {
-	listen     := flag.String("listen",     ":5900",                         "address to listen on (host:port)")
-	upstream   := flag.String("upstream",   "http://127.0.0.1:9290",        "llama-swap base URL")
-	configPath := flag.String("config",     "/ai/llama-swap/config.yaml",   "path to llama-swap config.yaml")
+	listen := flag.String("listen", ":5900", "address to listen on (host:port)")
+	upstream := flag.String("upstream", "http://127.0.0.1:9290", "llama-swap base URL")
+	configPath := flag.String("config", "/ai/llama-swap/config.yaml", "path to llama-swap config.yaml")
 	flag.Parse()
 
 	llamaSwapProxy, err := newReverseProxy(*upstream)
@@ -250,7 +250,7 @@ func main() {
 		log.Fatalf("failed to create llama-swap proxy: %v", err)
 	}
 
-	http.HandleFunc("/opencode", func(w http.ResponseWriter, r *http.Request) {
+	opencodeHandler := func(w http.ResponseWriter, r *http.Request) {
 		scheme := "http"
 		if r.TLS != nil {
 			scheme = "https"
@@ -376,7 +376,10 @@ func main() {
 		if err := enc.Encode(cfg); err != nil {
 			log.Printf("opencode: encode error: %v", err)
 		}
-	})
+	}
+
+	http.HandleFunc("/opencode", opencodeHandler)
+	http.HandleFunc("/v1/opencode", opencodeHandler)
 
 	http.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		resp, err := http.Get(*upstream + "/v1/models")

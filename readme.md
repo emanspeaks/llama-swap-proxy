@@ -41,7 +41,7 @@ Fetches the upstream `/v1/models` response and transforms it:
   - `max_context_length` — architectural maximum (`meta.llamaswap.max_context`); falls back to `context_length` when not set.
   - `capabilities` — passed through from `meta.llamaswap.capabilities` verbatim.
 
-### `GET /opencode` — opencode provider config
+### `GET /opencode` and `GET /v1/opencode` — opencode provider config
 
 Returns a JSON document conforming to the [opencode config schema](https://opencode.ai/config.json). The provider name is derived from the `Host` header of the request so it works correctly whether accessed by hostname or IP.
 
@@ -67,7 +67,7 @@ models:
         vision: false
 ```
 
-The generated config can be dropped directly into an opencode `config.json` or fetched dynamically with an `extends` entry.
+Both paths return the same payload. The generated config can be dropped directly into an opencode `config.json` or fetched dynamically with an `extends` entry.
 
 ### `/*` — transparent pass-through
 
