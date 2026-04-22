@@ -1,0 +1,14 @@
+bool
+GGUF
+GOARCH
+gomod
+ldflags
+mmproj
+myhostname
+nixos
+nixpkgs
+numtide
+opencode
+pkgs
+sdcpp
+stable-diffusion-cpp

@@ -1,0 +1,41 @@
+name: Update gomod2nix.toml
+
+on:
+  push:
+    paths:
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    name: Regenerate go.sum and gomod2nix.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - uses: DeterminateSystems/nix-installer-action@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tidy modules (generates/updates go.sum)
+        run: go mod tidy
+
+      - name: Regenerate gomod2nix.toml
+        run: nix run github:nix-community/gomod2nix -- generate
+
+      - name: Commit if changed
+        run: |
+          git add go.sum gomod2nix.toml
+          git diff --cached --quiet && exit 0
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "nix: regenerate go.sum and gomod2nix.toml"
+          git push
