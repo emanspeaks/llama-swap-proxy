@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: ver
+        run: |
+          ver="v$(cat VERSION | tr -d '[:space:]')"
+          echo "tag=${ver}" >> "$GITHUB_OUTPUT"
+          echo "version=${ver}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Check tag is new
+        run: |
+          if git tag | grep -qx "${{ steps.ver.outputs.tag }}"; then
+            echo "::error::Tag ${{ steps.ver.outputs.tag }} already exists. Bump VERSION to create a new release."
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build linux/amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${{ steps.ver.outputs.tag }}" \
+            -o llama-swap-proxy-linux-amd64 .
+
+      - name: Build linux/arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: |
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${{ steps.ver.outputs.tag }}" \
+            -o llama-swap-proxy-linux-arm64 .
+
+      - name: Create release ${{ steps.ver.outputs.tag }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          files: llama-swap-proxy-linux-*
+          generate_release_notes: true

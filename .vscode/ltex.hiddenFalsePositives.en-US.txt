@@ -1,0 +1,3 @@
+{"rule":"UPPERCASE_SENTENCE_START","sentence":"^\\Qllama-swap-proxy\\E$"}
+{"rule":"EN_A_VS_AN","sentence":"^\\QThe generated config can be dropped directly into an opencode \\E(?:Dummy|Ina|Jimmy-|Dummy-|Maniquí-|Maniquíes-|Dummy\\+|Dummy's\\+)[0-9]+\\Q or fetched dynamically with an \\E(?:Dummy|Ina|Jimmy-|Dummy-|Maniquí-|Maniquíes-|Dummy\\+|Dummy's\\+)[0-9]+\\Q entry.\\E$"}
+{"rule":"NUMBERS_IN_WORDS","sentence":"^\\QRequires Go 1.22+ and gomod2nix if updating dependencies.\\E$"}

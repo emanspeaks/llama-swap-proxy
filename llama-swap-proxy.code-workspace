@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"claudeCode.allowDangerouslySkipPermissions": true,
+		"files.exclude": {
+			"llama-swap-proxy-linux-*": true
+		},
+    "files.associations": {
+      "VERSION": "plaintext"
+    },
+    "go.toolsEnvVars": {
+      "GOOS": "linux",
+      "GOARCH": "amd64"
+    },
+	}
+}

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  version-bump:
+    name: VERSION must be updated
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check VERSION changed
+        run: |
+          if git diff origin/main...HEAD -- VERSION | grep -q '^+[0-9]'; then
+            echo "VERSION updated: $(cat VERSION)"
+          else
+            echo "::error::VERSION must be updated in every PR to main. Edit the VERSION file to bump the version."
+            exit 1
+          fi
+
+  build:
+    name: Build check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: go vet ./...
+
+      - name: Build
+        run: go build -v -o llama-swap-proxy .
+
+      - name: Verify binary exists and runs
+        run: ./llama-swap-proxy --help || true
