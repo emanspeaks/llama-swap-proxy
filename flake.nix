@@ -69,6 +69,16 @@
               '';
             };
 
+            opencodeHostname = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              description = ''
+                Custom host (and optional port) to use in /opencode response URLs,
+                e.g. "myserver.local:5900".  When set, overrides the Host header of
+                the incoming request.  Leave empty to use the request Host header.
+              '';
+            };
+
             extraArgs = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = [];
@@ -95,6 +105,9 @@
                     "${lib.getExe cfg.package}"
                     "--listen" ":${toString cfg.port}"
                     "--upstream" cfg.upstream
+                  ]
+                  ++ lib.optionals (cfg.opencodeHostname != "") [
+                    "--opencode-hostname" cfg.opencodeHostname
                   ]
                   ++ cfg.extraArgs
                 );
