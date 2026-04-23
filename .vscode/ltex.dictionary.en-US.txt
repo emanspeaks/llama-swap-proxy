@@ -1,7 +1,9 @@
 bool
 GGUF
 GOARCH
+gofmt
 gomod
+gopkg
 ldflags
 mmproj
 myhostname
