@@ -243,6 +243,7 @@ func main() {
 	listen := flag.String("listen", ":5900", "address to listen on (host:port)")
 	upstream := flag.String("upstream", "http://127.0.0.1:9290", "llama-swap base URL")
 	configPath := flag.String("config", "/ai/llama-swap/config.yaml", "path to llama-swap config.yaml")
+	opencodeHostname := flag.String("opencode-hostname", "", "custom host (and optional port) for /opencode endpoint responses, e.g. myserver.local:5900 (overrides request Host header)")
 	flag.Parse()
 
 	llamaSwapProxy, err := newReverseProxy(*upstream)
@@ -257,8 +258,11 @@ func main() {
 		}
 		host := r.Host
 		hostname := host
-		if i := strings.LastIndex(host, ":"); i != -1 {
-			hostname = host[:i]
+		if *opencodeHostname != "" {
+			hostname = *opencodeHostname
+		}
+		if i := strings.LastIndex(hostname, ":"); i != -1 {
+			hostname = hostname[:i]
 		}
 		baseURL := scheme + "://" + host + "/v1"
 
@@ -293,11 +297,16 @@ func main() {
 		ocModels := make(map[string]OpenCodeModel)
 		for name, def := range lsCfg.Models {
 			mt, _ := def.Metadata["model_type"].(string)
-			if mt == "sd" {
+			if mt == "sd" || mt == "embedding" {
 				continue
 			}
 
 			cmd := expandMacros(def.Cmd, lsCfg.Macros)
+
+			// Skip embedding-only servers (no chat completions endpoint)
+			if strings.Contains(cmd, "--embedding") {
+				continue
+			}
 
 			// Context priority: live n_ctx from running model > -c flag > GGUF native max
 			ctx := parseContext(cmd)
