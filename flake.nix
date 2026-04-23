@@ -87,7 +87,7 @@
 
             package = lib.mkOption {
               type = lib.types.package;
-              default = self.packages.${pkgs.system}.default;
+              default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
               defaultText = lib.literalExpression "llama-swap-proxy flake package";
               description = "The llama-swap-proxy package to use.";
             };
