@@ -14,3 +14,5 @@ opencode
 pkgs
 sdcpp
 stable-diffusion-cpp
+stdenv
+templating

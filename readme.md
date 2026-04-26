@@ -52,11 +52,12 @@ For each model defined in `config.yaml` that passes the configured `metadata.mod
 
 1. Applies `--opencode-include-model-type` and `--opencode-exclude-model-type` against `metadata.model_type`. If neither is set, all model types are eligible. If only include is set, only listed model types are eligible. If only exclude is set, listed model types are omitted. If both are set, exclude wins and everything else remains eligible.
 2. Skips launch commands containing `--embedding`, because those are treated as embedding-only servers with no chat completions endpoint.
-3. Parses the model's `cmd` to extract the `-c` (context) and `-m` (model file path) flags.
-4. If the model is currently running, queries its llama-server `/props` endpoint for the live `n_ctx` value (takes priority over the `-c` flag).
-5. If a model file path is found, reads the GGUF header directly to obtain the native `context_length` (fallback when `-c` is not set) and the `tokenizer.chat_template` field.
-6. Derives capabilities from the chat template: `tool_call` when the template contains `tools`, `tool_calls`, `[TOOL_CALLS]`, or `<tool_call>`; `reasoning` when it contains `<think>`, `<|think|>`, `enable_thinking`, or `<|thinking|>`; and `vision` / `attachment` when the launch command contains `--mmproj`.
-7. Any of the above can be overridden per-model in `config.yaml` under `metadata.capabilities`:
+3. Expands macros in the model `cmd` before parsing using global `macros`, model-level `models.<id>.macros` (model-level wins), automatic `${MODEL_ID}`, and environment macros like `${env.NAME}`; `${PORT}` is intentionally not expanded for `/opencode` derivation because it is not needed for model selection or capability metadata.
+4. Parses the expanded model `cmd` to extract the configured context (`-c` or `--ctx-size`) and model file path (`-m` or `--model`).
+5. If a model file path is found, reads the GGUF header directly to obtain native `context_length` and the `tokenizer.chat_template` field.
+6. Sets model limits with `limit.context` from the configured command context and `limit.input` from GGUF `context_length` when available.
+7. Derives capabilities from the GGUF chat template unless the command explicitly overrides chat templating (`--chat-template` / `--chat-template-file`); command flags like `--skip-chat-parsing`, `--no-jinja`, `--reasoning off`, or `--reasoning-format none` can force capabilities off.
+8. Any of the above can be overridden per-model in `config.yaml` under `metadata.capabilities`:
 
 ```yaml
 models:
