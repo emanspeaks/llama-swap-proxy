@@ -75,14 +75,18 @@ type ProxyModelsResponse struct {
 
 // llama-swap config.yaml structures
 type LlamaSwapConfigFile struct {
-	Macros map[string]string            `yaml:"macros"`
-	Models map[string]LlamaSwapModelDef `yaml:"models"`
+	StartPort int                          `yaml:"startPort"`
+	Macros    map[string]interface{}       `yaml:"macros"`
+	Models    map[string]LlamaSwapModelDef `yaml:"models"`
 }
 
 type LlamaSwapModelDef struct {
-	Cmd      string                 `yaml:"cmd"`
-	Aliases  []string               `yaml:"aliases"`
-	Metadata map[string]interface{} `yaml:"metadata"`
+	Cmd           string                 `yaml:"cmd"`
+	Proxy         string                 `yaml:"proxy"`
+	CheckEndpoint string                 `yaml:"checkEndpoint"`
+	Macros        map[string]interface{} `yaml:"macros"`
+	Aliases       []string               `yaml:"aliases"`
+	Metadata      map[string]interface{} `yaml:"metadata"`
 }
 
 // llama-server /props response (minimal)
@@ -120,6 +124,7 @@ type OpenCodeModel struct {
 
 type OpenCodeLimit struct {
 	Context int `json:"context"`
+	Input   int `json:"input,omitempty"`
 	Output  int `json:"output"`
 }
 
@@ -128,11 +133,46 @@ type OpenCodeModalities struct {
 	Output []string `json:"output"`
 }
 
-var reFlagC = regexp.MustCompile(`-c\s+(\d+)`)
-var reFlagM = regexp.MustCompile(`-m\s+(\S+)`)
+var reFlagContext = regexp.MustCompile(`(?:^|\s)(?:-c|--ctx-size)(?:\s+|=)(\d+)(?:\s|$)`)
+var reFlagModelPath = regexp.MustCompile(`(?:^|\s)(?:-m|--model)(?:\s+|=)(\S+)(?:\s|$)`)
+var reFlagChatTemplate = regexp.MustCompile(`(?:^|\s)--chat-template(?:\s+|=)`) // explicit template override
+var reFlagChatTemplateFile = regexp.MustCompile(`(?:^|\s)--chat-template-file(?:\s+|=)`)
+var reFlagSkipChatParsing = regexp.MustCompile(`(?:^|\s)--skip-chat-parsing(?:\s|$)`)
+var reFlagNoJinja = regexp.MustCompile(`(?:^|\s)--no-jinja(?:\s|$)`)
+var reFlagReasoningOff = regexp.MustCompile(`(?:^|\s)(?:-rea|--reasoning)(?:\s+|=)off(?:\s|$)`)
+var reFlagReasoningOn = regexp.MustCompile(`(?:^|\s)(?:-rea|--reasoning)(?:\s+|=)on(?:\s|$)`)
+var reFlagReasoningFormatNone = regexp.MustCompile(`(?:^|\s)--reasoning-format(?:\s+|=)none(?:\s|$)`)
+var reEnvMacro = regexp.MustCompile(`\$\{env\.([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-func expandMacros(s string, macros map[string]string) string {
-	for i := 0; i < 5; i++ {
+func expandEnvMacros(s string) (string, error) {
+	missing := ""
+	out := reEnvMacro.ReplaceAllStringFunc(s, func(token string) string {
+		m := reEnvMacro.FindStringSubmatch(token)
+		if len(m) < 2 {
+			return token
+		}
+		if value, ok := os.LookupEnv(m[1]); ok {
+			return value
+		}
+		if missing == "" {
+			missing = m[1]
+		}
+		return token
+	})
+	if missing != "" {
+		return "", fmt.Errorf("missing env macro: %s", missing)
+	}
+	return out, nil
+}
+
+func expandMacros(s string, macros map[string]string) (string, error) {
+	for i := 0; i < 8; i++ {
+		expanded, err := expandEnvMacros(s)
+		if err != nil {
+			return "", err
+		}
+		s = expanded
+
 		prev := s
 		for k, v := range macros {
 			s = strings.ReplaceAll(s, "${"+k+"}", v)
@@ -141,11 +181,48 @@ func expandMacros(s string, macros map[string]string) string {
 			break
 		}
 	}
-	return s
+	return s, nil
+}
+
+func macroMapToStrings(raw map[string]interface{}) (map[string]string, error) {
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		switch t := v.(type) {
+		case string:
+			out[k] = t
+		case int:
+			out[k] = strconv.Itoa(t)
+		case int64:
+			out[k] = strconv.FormatInt(t, 10)
+		case float64:
+			out[k] = strconv.FormatFloat(t, 'f', -1, 64)
+		case bool:
+			if t {
+				out[k] = "true"
+			} else {
+				out[k] = "false"
+			}
+		default:
+			return nil, fmt.Errorf("macro %q has unsupported type %T", k, v)
+		}
+	}
+	return out, nil
+}
+
+func stripCommentOnlyLines(s string) string {
+	lines := strings.Split(s, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 func parseContext(cmd string) int {
-	m := reFlagC.FindStringSubmatch(cmd)
+	m := reFlagContext.FindStringSubmatch(cmd)
 	if len(m) < 2 {
 		return 0
 	}
@@ -154,11 +231,15 @@ func parseContext(cmd string) int {
 }
 
 func parseModelPath(cmd string) string {
-	m := reFlagM.FindStringSubmatch(cmd)
+	m := reFlagModelPath.FindStringSubmatch(cmd)
 	if len(m) < 2 {
 		return ""
 	}
 	return m[1]
+}
+
+func cmdHasFlag(cmd string, re *regexp.Regexp) bool {
+	return re.FindStringIndex(cmd) != nil
 }
 
 func parseListFlag(raw string) map[string]struct{} {
@@ -194,25 +275,6 @@ func shouldIncludeOpenCodeModel(modelType string, includeTypes, excludeTypes map
 		}
 		return true
 	}
-}
-
-// queryProps fetches n_ctx from a running llama-server instance.
-// Returns 0 on any error so callers can fall back to config-derived values.
-func queryProps(proxyURL string) int {
-	resp, err := http.Get(proxyURL + "/props")
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0
-	}
-	var props LlamaServerProps
-	if err := json.Unmarshal(body, &props); err != nil {
-		return 0
-	}
-	return props.DefaultGenerationSettings.NCtx
 }
 
 func findRunningSDProxy(upstream string) (modelID, proxyURL string, err error) {
@@ -320,19 +382,11 @@ func main() {
 			http.Error(w, fmt.Sprintf("cannot parse config: %v", err), http.StatusInternalServerError)
 			return
 		}
-
-		// Get running models so we can query their live props
-		runningProxies := map[string]string{}
-		if resp, err := http.Get(*upstream + "/running"); err == nil {
-			defer resp.Body.Close()
-			if body, err := io.ReadAll(resp.Body); err == nil {
-				var running RunningResponse
-				if json.Unmarshal(body, &running) == nil {
-					for _, m := range running.Running {
-						runningProxies[m.Model] = m.Proxy
-					}
-				}
-			}
+		globalMacros, err := macroMapToStrings(lsCfg.Macros)
+		if err != nil {
+			log.Printf("opencode: parse global macros: %v", err)
+			http.Error(w, fmt.Sprintf("invalid global macros: %v", err), http.StatusInternalServerError)
+			return
 		}
 
 		ocModels := make(map[string]OpenCodeModel)
@@ -342,43 +396,81 @@ func main() {
 				continue
 			}
 
-			cmd := expandMacros(def.Cmd, lsCfg.Macros)
+			modelMacros, err := macroMapToStrings(def.Macros)
+			if err != nil {
+				log.Printf("opencode: parse model macros %s: %v", name, err)
+				http.Error(w, fmt.Sprintf("invalid model macros for %s: %v", name, err), http.StatusInternalServerError)
+				return
+			}
+
+			macros := make(map[string]string, len(globalMacros)+len(modelMacros)+1)
+			for k, v := range globalMacros {
+				macros[k] = v
+			}
+			for k, v := range modelMacros {
+				macros[k] = v
+			}
+			macros["MODEL_ID"] = name
+
+			cmd, err := expandMacros(def.Cmd, macros)
+			if err != nil {
+				log.Printf("opencode: expand macros %s: %v", name, err)
+				http.Error(w, fmt.Sprintf("cannot expand macros for %s: %v", name, err), http.StatusInternalServerError)
+				return
+			}
+			cmd = stripCommentOnlyLines(cmd)
 
 			// Skip embedding-only servers (no chat completions endpoint)
 			if strings.Contains(cmd, "--embedding") {
 				continue
 			}
 
-			// Context priority: live n_ctx from running model > -c flag > GGUF native max
-			ctx := parseContext(cmd)
-			if proxyURL, ok := runningProxies[name]; ok {
-				if live := queryProps(proxyURL); live > 0 {
-					ctx = live
-				}
-			}
+			// Context from configured command. Do not use live /props here.
+			configuredCtx := parseContext(cmd)
+			maxCtx := 0
 
-			// Read GGUF metadata for capabilities (tool_call, reasoning, native context)
+			// Read GGUF metadata for capabilities and architecture max context.
 			var gguf *GGUFMeta
 			if modelPath := parseModelPath(cmd); modelPath != "" {
 				if meta, err := readGGUFMeta(modelPath); err != nil {
 					log.Printf("opencode: gguf %s: %v", name, err)
 				} else {
 					gguf = meta
-					if ctx == 0 && gguf.ContextLength > 0 {
-						ctx = int(gguf.ContextLength)
+					if gguf.ContextLength > 0 {
+						maxCtx = int(gguf.ContextLength)
 					}
 				}
 			}
 
 			m := OpenCodeModel{Name: name}
-			if ctx > 0 {
-				m.Limit = &OpenCodeLimit{Context: ctx, Output: ctx}
+			if configuredCtx > 0 || maxCtx > 0 {
+				contextLimit := configuredCtx
+				if contextLimit == 0 {
+					contextLimit = maxCtx
+				}
+				m.Limit = &OpenCodeLimit{Context: contextLimit, Output: contextLimit}
+				if maxCtx > 0 {
+					m.Limit.Input = maxCtx
+				}
 			}
 
-			// Capabilities from GGUF chat template (authoritative source)
-			if gguf != nil {
+			templateOverridden := cmdHasFlag(cmd, reFlagChatTemplate) || cmdHasFlag(cmd, reFlagChatTemplateFile)
+			// Capabilities from GGUF chat template when command does not replace the template.
+			if gguf != nil && !templateOverridden {
 				m.ToolCall = GGUFHasToolCall(gguf.ChatTemplate)
 				m.Reasoning = GGUFHasReasoning(gguf.ChatTemplate)
+			}
+
+			// Command-line flags can disable reasoning/tool parsing even if GGUF supports it.
+			if cmdHasFlag(cmd, reFlagSkipChatParsing) || cmdHasFlag(cmd, reFlagNoJinja) {
+				m.ToolCall = false
+				m.Reasoning = false
+			}
+			if cmdHasFlag(cmd, reFlagReasoningOff) || cmdHasFlag(cmd, reFlagReasoningFormatNone) {
+				m.Reasoning = false
+			}
+			if cmdHasFlag(cmd, reFlagReasoningOn) {
+				m.Reasoning = true
 			}
 
 			// Vision: --mmproj flag is the reliable indicator for multimodal models
