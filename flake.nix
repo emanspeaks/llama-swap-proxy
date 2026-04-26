@@ -69,6 +69,15 @@
               '';
             };
 
+            config = lib.mkOption {
+              type = lib.types.str;
+              default = "/ai/llama-swap/config.yaml";
+              description = ''
+                Path to the llama-swap config.yaml file used by the /opencode
+                endpoint when generating provider metadata.
+              '';
+            };
+
             opencodeHostname = lib.mkOption {
               type = lib.types.str;
               default = "";
@@ -76,6 +85,27 @@
                 Custom host (and optional port) to use in /opencode response URLs,
                 e.g. "myserver.local:5900".  When set, overrides the Host header of
                 the incoming request.  Leave empty to use the request Host header.
+              '';
+            };
+
+            opencodeIncludeModelType = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [];
+              example = [ "llm" "vlm" ];
+              description = ''
+                List of metadata.model_type values to include in /opencode responses.
+                When non-empty, only the listed model types are eligible unless they
+                are also listed in opencodeExcludeModelType.
+              '';
+            };
+
+            opencodeExcludeModelType = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [];
+              example = [ "embedding" "sd" ];
+              description = ''
+                List of metadata.model_type values to exclude from /opencode responses.
+                Exclusions take priority over opencodeIncludeModelType.
               '';
             };
 
@@ -105,9 +135,18 @@
                     "${lib.getExe cfg.package}"
                     "--listen" ":${toString cfg.port}"
                     "--upstream" cfg.upstream
+                    "--config" cfg.config
                   ]
                   ++ lib.optionals (cfg.opencodeHostname != "") [
                     "--opencode-hostname" cfg.opencodeHostname
+                  ]
+                  ++ lib.optionals (cfg.opencodeIncludeModelType != []) [
+                    "--opencode-include-model-type"
+                    (lib.concatStringsSep "," cfg.opencodeIncludeModelType)
+                  ]
+                  ++ lib.optionals (cfg.opencodeExcludeModelType != []) [
+                    "--opencode-exclude-model-type"
+                    (lib.concatStringsSep "," cfg.opencodeExcludeModelType)
                   ]
                   ++ cfg.extraArgs
                 );

@@ -81,6 +81,7 @@ type LlamaSwapConfigFile struct {
 
 type LlamaSwapModelDef struct {
 	Cmd      string                 `yaml:"cmd"`
+	Aliases  []string               `yaml:"aliases"`
 	Metadata map[string]interface{} `yaml:"metadata"`
 }
 
@@ -158,6 +159,41 @@ func parseModelPath(cmd string) string {
 		return ""
 	}
 	return m[1]
+}
+
+func parseListFlag(raw string) map[string]struct{} {
+	values := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		value := strings.ToLower(strings.TrimSpace(part))
+		if value == "" {
+			continue
+		}
+		values[value] = struct{}{}
+	}
+	return values
+}
+
+func shouldIncludeOpenCodeModel(modelType string, includeTypes, excludeTypes map[string]struct{}) bool {
+	modelType = strings.ToLower(strings.TrimSpace(modelType))
+	_, included := includeTypes[modelType]
+	_, excluded := excludeTypes[modelType]
+
+	switch {
+	case len(includeTypes) == 0 && len(excludeTypes) == 0:
+		return true
+	case len(includeTypes) > 0 && len(excludeTypes) == 0:
+		return included
+	case len(includeTypes) == 0 && len(excludeTypes) > 0:
+		return !excluded
+	default:
+		if excluded {
+			return false
+		}
+		if included {
+			return true
+		}
+		return true
+	}
 }
 
 // queryProps fetches n_ctx from a running llama-server instance.
@@ -244,7 +280,12 @@ func main() {
 	upstream := flag.String("upstream", "http://127.0.0.1:9290", "llama-swap base URL")
 	configPath := flag.String("config", "/ai/llama-swap/config.yaml", "path to llama-swap config.yaml")
 	opencodeHostname := flag.String("opencode-hostname", "", "custom host (and optional port) for /opencode endpoint responses, e.g. myserver.local:5900 (overrides request Host header)")
+	opencodeIncludeModelType := flag.String("opencode-include-model-type", "", "comma-separated metadata.model_type values to include in /opencode responses")
+	opencodeExcludeModelType := flag.String("opencode-exclude-model-type", "", "comma-separated metadata.model_type values to exclude from /opencode responses")
 	flag.Parse()
+
+	includeModelTypes := parseListFlag(*opencodeIncludeModelType)
+	excludeModelTypes := parseListFlag(*opencodeExcludeModelType)
 
 	llamaSwapProxy, err := newReverseProxy(*upstream)
 	if err != nil {
@@ -297,7 +338,7 @@ func main() {
 		ocModels := make(map[string]OpenCodeModel)
 		for name, def := range lsCfg.Models {
 			mt, _ := def.Metadata["model_type"].(string)
-			if mt == "sd" || mt == "embedding" {
+			if !shouldIncludeOpenCodeModel(mt, includeModelTypes, excludeModelTypes) {
 				continue
 			}
 
@@ -365,6 +406,11 @@ func main() {
 			}
 
 			ocModels[name] = m
+			for _, alias := range def.Aliases {
+				aliasModel := m
+				aliasModel.Name = alias
+				ocModels[alias] = aliasModel
+			}
 		}
 
 		cfg := OpenCodeConfig{
