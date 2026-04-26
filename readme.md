@@ -17,6 +17,8 @@ A lightweight reverse proxy that sits in front of [llama-swap](https://github.co
 | `--upstream` | `http://127.0.0.1:9290` | Base URL of the llama-swap instance |
 | `--config` | `/ai/llama-swap/config.yaml` | Path to llama-swap's `config.yaml` (used by `/opencode`) |
 | `--opencode-hostname` | _(request Host)_ | Custom host (and optional port) for `/opencode` response URLs, e.g. `myserver.local:5900`. Overrides the `Host` header derived from the incoming request. Useful when the proxy is accessed via a different address than clients should use. |
+| `--opencode-include-model-type` | `""` | Comma-separated `metadata.model_type` values to include in `/opencode`. If set by itself, only matching model types are returned. |
+| `--opencode-exclude-model-type` | `""` | Comma-separated `metadata.model_type` values to exclude from `/opencode`. If set by itself, all non-matching model types are returned. |
 
 ---
 
@@ -46,20 +48,22 @@ Fetches the upstream `/v1/models` response and transforms it:
 
 Returns a JSON document conforming to the [opencode config schema](https://opencode.ai/config.json). The hostname used in response URLs is taken from `--opencode-hostname` if set, otherwise from the `Host` header of the incoming request. Use `--opencode-hostname` when the proxy is reached via a different address than what opencode clients should connect to.
 
-For each non-SD, non-embedding model defined in `config.yaml` the endpoint:
+For each model defined in `config.yaml` that passes the configured `metadata.model_type` filters, the endpoint:
 
-1. Parses the model's `cmd` to extract the `-c` (context) and `-m` (model file path) flags.
-2. If the model is currently running, queries its llama-server `/props` endpoint for the live `n_ctx` value (takes priority over the `-c` flag).
-3. If a model file path is found, reads the GGUF header directly to obtain the native `context_length` (fallback when `-c` is not set) and the `tokenizer.chat_template` field.
-4. Derives capabilities from the chat template:
-   - **`tool_call`** — template contains `tools`, `tool_calls`, `[TOOL_CALLS]`, or `<tool_call>`.
-   - **`reasoning`** — template contains `<think>`, `<|think|>`, `enable_thinking`, or `<|thinking|>`.
-   - **`vision` / `attachment`** — the `--mmproj` flag is present in the launch command.
-5. Any of the above can be overridden per-model in `config.yaml` under `metadata.capabilities`:
+1. Applies `--opencode-include-model-type` and `--opencode-exclude-model-type` against `metadata.model_type`. If neither is set, all model types are eligible. If only include is set, only listed model types are eligible. If only exclude is set, listed model types are omitted. If both are set, exclude wins and everything else remains eligible.
+2. Skips launch commands containing `--embedding`, because those are treated as embedding-only servers with no chat completions endpoint.
+3. Parses the model's `cmd` to extract the `-c` (context) and `-m` (model file path) flags.
+4. If the model is currently running, queries its llama-server `/props` endpoint for the live `n_ctx` value (takes priority over the `-c` flag).
+5. If a model file path is found, reads the GGUF header directly to obtain the native `context_length` (fallback when `-c` is not set) and the `tokenizer.chat_template` field.
+6. Derives capabilities from the chat template: `tool_call` when the template contains `tools`, `tool_calls`, `[TOOL_CALLS]`, or `<tool_call>`; `reasoning` when it contains `<think>`, `<|think|>`, `enable_thinking`, or `<|thinking|>`; and `vision` / `attachment` when the launch command contains `--mmproj`.
+7. Any of the above can be overridden per-model in `config.yaml` under `metadata.capabilities`:
 
 ```yaml
 models:
   my-model:
+    aliases:
+      - my-model-fast
+      - my-model-latest
     cmd: llama-server -m /models/my-model.gguf -c 8192
     metadata:
       capabilities:
@@ -67,6 +71,8 @@ models:
         reasoning: false
         vision: false
 ```
+
+Any `aliases` entries are also emitted in the `/opencode` model map, reusing the same generated settings as the parent model but with the alias name.
 
 Both paths return the same payload. The generated config can be dropped directly into an opencode `config.json` or fetched dynamically with an `extends` entry.
 
@@ -113,11 +119,20 @@ services.llama-swap-proxy = {
   # Optional — defaults to http://localhost:${config.services.llama-swap.port}
   # upstream = "http://localhost:9290";
 
+  # Optional — defaults to /ai/llama-swap/config.yaml
+  # config = "/path/to/llama-swap/config.yaml";
+
   # Optional — override hostname used in /opencode response URLs
   # opencodeHostname = "myserver.local:5900";
 
+  # Optional — whitelist metadata.model_type values for /opencode
+  # opencodeIncludeModelType = [ "llm" "vlm" ];
+
+  # Optional — blacklist metadata.model_type values for /opencode
+  # opencodeExcludeModelType = [ "embedding" "sd" ];
+
   # Optional — extra args passed verbatim to the binary
-  # extraArgs = [ "--config" "/path/to/config.yaml" ];
+  # extraArgs = [ ];
 };
 ```
 
@@ -130,7 +145,10 @@ The `upstream` option automatically tracks `services.llama-swap.port` so a port 
 | `enable` | bool | `false` | Enable the service |
 | `port` | port | `5900` | TCP port to listen on |
 | `upstream` | string | `http://localhost:${services.llama-swap.port}` | Upstream llama-swap URL |
+| `config` | string | `"/ai/llama-swap/config.yaml"` | Path to llama-swap `config.yaml` used by `/opencode` |
 | `opencodeHostname` | string | `""` | Custom host (and optional port) for `/opencode` response URLs, e.g. `"myserver.local:5900"`. Empty string means use the request `Host` header. |
+| `opencodeIncludeModelType` | list of string | `[]` | Whitelist of `metadata.model_type` values eligible for `/opencode` |
+| `opencodeExcludeModelType` | list of string | `[]` | Blacklist of `metadata.model_type` values omitted from `/opencode`; takes priority over include |
 | `extraArgs` | list of string | `[]` | Extra CLI arguments |
 | `package` | package | flake default | Override the package |
 
