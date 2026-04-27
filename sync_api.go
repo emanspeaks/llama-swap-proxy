@@ -96,6 +96,7 @@ func (s *SyncServer) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	endpoint := strings.TrimSpace(parts[1])
 	user := s.resolveUser(r, requestedUser)
 	scope := s.resolveScope(r)
+	log.Printf("sessions api hit method=%s endpoint=%s requested_user=%s resolved_user=%s scope=%s path=%s", r.Method, endpoint, requestedUser, user, scope, r.URL.Path)
 
 	switch endpoint {
 	case "snapshot":
@@ -169,7 +170,9 @@ func (s *SyncServer) handleSync(w http.ResponseWriter, r *http.Request, user, sc
 }
 
 func (s *SyncServer) handleWS(ws *websocket.Conn, user, scope string) {
+	log.Printf("sessions ws connected user=%s scope=%s", user, scope)
 	defer func() {
+		log.Printf("sessions ws disconnected user=%s scope=%s", user, scope)
 		_ = ws.Close()
 	}()
 
