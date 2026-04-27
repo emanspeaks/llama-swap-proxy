@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -57,6 +58,8 @@ func injectWebUISync(resp *http.Response, cfg InjectionConfig) error {
 		resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 		return nil
 	}
+
+	log.Printf("webui sync injection served path=%s model=%s scope=%s", resp.Request.URL.Path, modelID, scope)
 
 	out := []byte(injected)
 	resp.Body = io.NopCloser(bytes.NewReader(out))
