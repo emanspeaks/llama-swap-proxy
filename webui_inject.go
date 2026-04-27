@@ -27,6 +27,8 @@ func injectWebUISync(resp *http.Response, cfg InjectionConfig) error {
 		return nil
 	}
 	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
+		resp.Header.Set("X-Llama-Sync-Injection", "skipped-not-html")
+		log.Printf("webui sync injection skipped reason=not-html path=%s content_type=%s", resp.Request.URL.Path, resp.Header.Get("Content-Type"))
 		return nil
 	}
 
@@ -38,6 +40,8 @@ func injectWebUISync(resp *http.Response, cfg InjectionConfig) error {
 
 	htmlBody := string(body)
 	if !isLikelyLlamaCppWebUI(htmlBody) {
+		resp.Header.Set("X-Llama-Sync-Injection", "skipped-not-llamacpp-webui")
+		log.Printf("webui sync injection skipped reason=not-llamacpp-webui path=%s", resp.Request.URL.Path)
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		resp.ContentLength = int64(len(body))
 		resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
@@ -53,6 +57,8 @@ func injectWebUISync(resp *http.Response, cfg InjectionConfig) error {
 	rewritten := rewriteScriptTagsForSyncGate(htmlBody)
 	injected, changed := injectBootstrapScript(rewritten, cfg.DefaultUser, scope)
 	if !changed {
+		resp.Header.Set("X-Llama-Sync-Injection", "skipped-no-head-tag")
+		log.Printf("webui sync injection skipped reason=no-head-tag path=%s model=%s scope=%s", resp.Request.URL.Path, modelID, scope)
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		resp.ContentLength = int64(len(body))
 		resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
@@ -65,6 +71,7 @@ func injectWebUISync(resp *http.Response, cfg InjectionConfig) error {
 	resp.Body = io.NopCloser(bytes.NewReader(out))
 	resp.ContentLength = int64(len(out))
 	resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(out)))
+	resp.Header.Set("X-Llama-Sync-Injection", "applied")
 	resp.Header.Del("Content-Encoding")
 	return nil
 }
