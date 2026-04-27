@@ -156,6 +156,7 @@ func buildBootstrapScript(user, scope string) string {
   let wsReady = false;
   let reconnectTimer = null;
   let lastSyncSignature = '';
+  let hasAppliedInitialSnapshot = false;
 
   function logError(...args) {
     try { console.warn('[llama-swap-sync]', ...args); } catch {}
@@ -341,14 +342,32 @@ func buildBootstrapScript(user, scope string) string {
     }
   }
 
+  async function pullSnapshotHTTP() {
+    const url = apiBase + '/snapshot?scope=' + encodeURIComponent(scope);
+    const resp = await fetch(url, { credentials: 'same-origin' });
+    if (!resp.ok) {
+      throw new Error('snapshot request failed: ' + resp.status);
+    }
+    return resp.json();
+  }
+
+  async function pushSnapshotHTTP(payload) {
+    const url = apiBase + '/sync?scope=' + encodeURIComponent(scope);
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload)
+    });
+    if (!resp.ok) {
+      throw new Error('sync request failed: ' + resp.status);
+    }
+  }
+
   async function pushSnapshot() {
     if (suppressPush) {
       return;
     }
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-
     const payload = {
       clientId,
       localStorage: dumpLocalStorage(),
@@ -361,11 +380,15 @@ func buildBootstrapScript(user, scope string) string {
     }
 
     try {
-      ws.send(JSON.stringify({
-        type: 'sync',
-        clientId,
-        payload
-      }));
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'sync',
+          clientId,
+          payload
+        }));
+      } else {
+        await pushSnapshotHTTP(payload);
+      }
       lastSyncSignature = signature;
     } catch (err) {
       logError('push snapshot failed', err);
@@ -424,6 +447,10 @@ func buildBootstrapScript(user, scope string) string {
   }
 
   function startWebSocket() {
+    if (typeof WebSocket !== 'function') {
+      return Promise.resolve();
+    }
+
     const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws';
     const wsUrl = wsScheme + '://' + location.host + apiBase + '/ws?scope=' + encodeURIComponent(scope) + '&clientId=' + encodeURIComponent(clientId);
 
@@ -448,6 +475,7 @@ func buildBootstrapScript(user, scope string) string {
 
         ws.onopen = () => {
           wsReady = true;
+          resolveOnce();
           try {
             ws.send(JSON.stringify({ type: 'get-snapshot', clientId }));
           } catch (err) {
@@ -471,6 +499,7 @@ func buildBootstrapScript(user, scope string) string {
               suppressPush = true;
               applyLocalStorage(payload.snapshot.localStorage || {});
               await applyIndexedDB(payload.snapshot.indexedDB || {});
+              hasAppliedInitialSnapshot = true;
               lastSyncSignature = signatureOf(
                 payload.snapshot.localStorage || {},
                 payload.snapshot.indexedDB || {}
@@ -545,7 +574,28 @@ func buildBootstrapScript(user, scope string) string {
   (async () => {
     try {
       installWriteHooks();
-      await startWebSocket();
+      await Promise.race([
+        startWebSocket(),
+        new Promise((resolve) => setTimeout(resolve, 1500))
+      ]);
+
+      // iOS/Safari and some local-network setups may fail or delay WS; ensure
+      // startup always gets a snapshot via HTTP fallback.
+      if (!hasAppliedInitialSnapshot) {
+        try {
+          const snapshot = await pullSnapshotHTTP();
+          suppressPush = true;
+          applyLocalStorage(snapshot.localStorage || {});
+          await applyIndexedDB(snapshot.indexedDB || {});
+          hasAppliedInitialSnapshot = true;
+          lastSyncSignature = signatureOf(snapshot.localStorage || {}, snapshot.indexedDB || {});
+        } catch (err) {
+          logError('initial HTTP snapshot fallback failed', err);
+        } finally {
+          suppressPush = false;
+        }
+      }
+
       setInterval(() => queuePush(0), 30000);
       queuePush(500);
     } catch (err) {
