@@ -622,6 +622,7 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/upstream/") {
+			log.Printf("upstream request method=%s path=%s", r.Method, r.URL.Path)
 			injectingUpstreamProxy.ServeHTTP(w, r)
 			return
 		}
