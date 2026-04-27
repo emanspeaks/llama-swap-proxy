@@ -152,6 +152,10 @@ func buildBootstrapScript(user, scope string) string {
   const apiBase = '/api/sessions/' + encodeURIComponent(user);
   let suppressPush = false;
   let pushTimer = null;
+  let ws = null;
+  let wsReady = false;
+  let reconnectTimer = null;
+  let lastSyncSignature = '';
 
   function logError(...args) {
     try { console.warn('[llama-swap-sync]', ...args); } catch {}
@@ -329,17 +333,19 @@ func buildBootstrapScript(user, scope string) string {
     }
   }
 
-  async function pullSnapshot() {
-    const url = apiBase + '/snapshot?scope=' + encodeURIComponent(scope);
-    const resp = await fetch(url, { credentials: 'same-origin' });
-    if (!resp.ok) {
-      throw new Error('snapshot request failed: ' + resp.status);
+  function signatureOf(localStorageData, indexedDBData) {
+    try {
+      return JSON.stringify(localStorageData || {}) + '|' + JSON.stringify(indexedDBData || {});
+    } catch {
+      return '';
     }
-    return resp.json();
   }
 
   async function pushSnapshot() {
     if (suppressPush) {
+      return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
       return;
     }
 
@@ -349,14 +355,18 @@ func buildBootstrapScript(user, scope string) string {
       indexedDB: await dumpIndexedDB()
     };
 
-    const url = apiBase + '/sync?scope=' + encodeURIComponent(scope);
+    const signature = signatureOf(payload.localStorage, payload.indexedDB);
+    if (signature !== '' && signature === lastSyncSignature) {
+      return;
+    }
+
     try {
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(payload)
-      });
+      ws.send(JSON.stringify({
+        type: 'sync',
+        clientId,
+        payload
+      }));
+      lastSyncSignature = signature;
     } catch (err) {
       logError('push snapshot failed', err);
     }
@@ -415,53 +425,84 @@ func buildBootstrapScript(user, scope string) string {
 
   function startWebSocket() {
     const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = wsScheme + '://' + location.host + apiBase + '/ws?scope=' + encodeURIComponent(scope);
+    const wsUrl = wsScheme + '://' + location.host + apiBase + '/ws?scope=' + encodeURIComponent(scope) + '&clientId=' + encodeURIComponent(clientId);
 
-    let ws = null;
-    let reconnectTimer = null;
-
-    const connect = () => {
-      try {
-        ws = new WebSocket(wsUrl);
-      } catch (err) {
-        logError('ws connect failed', err);
-        reconnectTimer = setTimeout(connect, 2000);
-        return;
-      }
-
-      ws.onmessage = async (event) => {
-        let payload = null;
-        try {
-          payload = JSON.parse(event.data);
-        } catch {
-          return;
+    return new Promise((resolve) => {
+      let resolved = false;
+      const resolveOnce = () => {
+        if (!resolved) {
+          resolved = true;
+          resolve();
         }
-        if (!payload || payload.type !== 'updated') {
-          return;
-        }
+      };
 
+      const connect = () => {
         try {
-          const snapshot = await pullSnapshot();
-          suppressPush = true;
-          applyLocalStorage(snapshot.localStorage || {});
-          await applyIndexedDB(snapshot.indexedDB || {});
-          suppressPush = false;
+          ws = new WebSocket(wsUrl);
         } catch (err) {
-          suppressPush = false;
-          logError('ws pull/apply failed', err);
+          logError('ws connect failed', err);
+          reconnectTimer = setTimeout(connect, 2000);
+          resolveOnce();
+          return;
         }
+
+        ws.onopen = () => {
+          wsReady = true;
+          try {
+            ws.send(JSON.stringify({ type: 'get-snapshot', clientId }));
+          } catch (err) {
+            logError('ws get-snapshot failed', err);
+          }
+        };
+
+        ws.onmessage = async (event) => {
+          let payload = null;
+          try {
+            payload = JSON.parse(event.data);
+          } catch {
+            return;
+          }
+          if (!payload) {
+            return;
+          }
+
+          if (payload.type === 'snapshot' && payload.snapshot) {
+            try {
+              suppressPush = true;
+              applyLocalStorage(payload.snapshot.localStorage || {});
+              await applyIndexedDB(payload.snapshot.indexedDB || {});
+              lastSyncSignature = signatureOf(
+                payload.snapshot.localStorage || {},
+                payload.snapshot.indexedDB || {}
+              );
+              resolveOnce();
+            } catch (err) {
+              logError('ws apply snapshot failed', err);
+            } finally {
+              suppressPush = false;
+            }
+            return;
+          }
+
+          if (payload.type === 'error') {
+            logError('ws sync server error', payload.error || 'unknown error');
+            return;
+          }
+        };
+
+        ws.onclose = () => {
+          wsReady = false;
+          reconnectTimer = setTimeout(connect, 2000);
+          resolveOnce();
+        };
+
+        ws.onerror = () => {
+          try { ws.close(); } catch {}
+        };
       };
 
-      ws.onclose = () => {
-        reconnectTimer = setTimeout(connect, 2000);
-      };
-
-      ws.onerror = () => {
-        try { ws.close(); } catch {}
-      };
-    };
-
-    connect();
+      connect();
+    });
   }
 
   async function runDeferredScripts() {
@@ -503,16 +544,10 @@ func buildBootstrapScript(user, scope string) string {
 
   (async () => {
     try {
-      const snapshot = await pullSnapshot();
-      suppressPush = true;
-      applyLocalStorage(snapshot.localStorage || {});
-      await applyIndexedDB(snapshot.indexedDB || {});
-      suppressPush = false;
-
       installWriteHooks();
-      startWebSocket();
-      setInterval(() => queuePush(0), 5000);
-      queuePush(200);
+      await startWebSocket();
+      setInterval(() => queuePush(0), 30000);
+      queuePush(500);
     } catch (err) {
       suppressPush = false;
       logError('initial sync failed', err);

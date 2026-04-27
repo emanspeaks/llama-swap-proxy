@@ -158,7 +158,7 @@
             };
 
             systemd.tmpfiles.rules = [
-              "d ${cfg.sessionsDir} 0750 llama-swap-proxy llama-swap-proxy -"
+              "d ${cfg.sessionsDir} 0770 llama-swap-proxy llm -"
             ];
 
             systemd.services.llama-swap-proxy = {
