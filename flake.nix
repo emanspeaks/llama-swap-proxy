@@ -78,6 +78,33 @@
               '';
             };
 
+            sessionsDir = lib.mkOption {
+              type = lib.types.str;
+              default = "/ai/sessions";
+              description = ''
+                Directory used for centralized synchronized session storage.
+                The service stores SQLite state at sessions.db under this directory.
+              '';
+            };
+
+            defaultUser = lib.mkOption {
+              type = lib.types.str;
+              default = "user";
+              description = ''
+                Default username associated with synchronized session state when
+                no authentication layer is configured.
+              '';
+            };
+
+            isolateModelUserStates = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                When enabled, synchronized state is isolated per /upstream/<model>
+                namespace; when disabled, all models share one state namespace.
+              '';
+            };
+
             opencodeHostname = lib.mkOption {
               type = lib.types.str;
               default = "";
@@ -124,6 +151,16 @@
           };
 
           config = lib.mkIf cfg.enable {
+            users.groups.llama-swap-proxy = { };
+            users.users.llama-swap-proxy = {
+              isSystemUser = true;
+              group = "llama-swap-proxy";
+            };
+
+            systemd.tmpfiles.rules = [
+              "d ${cfg.sessionsDir} 0750 llama-swap-proxy llama-swap-proxy -"
+            ];
+
             systemd.services.llama-swap-proxy = {
               description = "llama-swap reverse proxy";
               wantedBy = [ "multi-user.target" ];
@@ -136,6 +173,11 @@
                     "--listen" ":${toString cfg.port}"
                     "--upstream" cfg.upstream
                     "--config" cfg.config
+                    "--sessions-dir" cfg.sessionsDir
+                    "--default-user" cfg.defaultUser
+                  ]
+                  ++ lib.optionals cfg.isolateModelUserStates [
+                    "--isolate-model-user-states"
                   ]
                   ++ lib.optionals (cfg.opencodeHostname != "") [
                     "--opencode-hostname" cfg.opencodeHostname
@@ -151,7 +193,8 @@
                   ++ cfg.extraArgs
                 );
 
-                DynamicUser = true;
+                User = "llama-swap-proxy";
+                Group = "llama-swap-proxy";
                 Restart = "on-failure";
                 RestartSec = "5s";
                 ProtectHome = true;

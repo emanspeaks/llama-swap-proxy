@@ -3,3 +3,4 @@
 {"rule":"NUMBERS_IN_WORDS","sentence":"^\\QRequires Go 1.22+ and gomod2nix if updating dependencies.\\E$"}
 {"rule":"ENGLISH_WORD_REPEAT_BEGINNING_RULE","sentence":"^\\QIf only exclude is set, listed model types are omitted.\\E$"}
 {"rule":"ENGLISH_WORD_REPEAT_BEGINNING_RULE","sentence":"^\\QIf both are set, exclude wins and everything else remains eligible.\\E$"}
+{"rule":"NUMBERS_IN_WORDS","sentence":"^\\QRequires Go 1.25+ and gomod2nix if updating dependencies.\\E$"}
