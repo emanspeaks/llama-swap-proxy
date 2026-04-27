@@ -6,6 +6,7 @@ A lightweight reverse proxy that sits in front of [llama-swap](https://github.co
 2. **Dynamic `/sdcpp/*` routing** — requests under `/sdcpp/` are routed at request time to whichever stable-diffusion-cpp model is currently loaded in llama-swap, without needing to know its address in advance.
 3. **Enhanced `/v1/models`** — filters out `sd` models and enriches the response with `context_length`, `max_context_length`, and `capabilities` so OpenAI-compatible clients get useful metadata.
 4. **`/opencode` config endpoint** — generates a ready-to-use [opencode](https://opencode.ai) provider config JSON, with per-model context limits and capability flags (tool calling, reasoning, vision) derived from GGUF metadata and live llama-server state.
+5. **Cross-device WebUI sync middleware** — injects sync bootstrap code into llama.cpp WebUI pages under `/upstream/<model>/` and centralizes both `localStorage` and IndexedDB state in a SQLite store.
 
 ---
 
@@ -16,6 +17,9 @@ A lightweight reverse proxy that sits in front of [llama-swap](https://github.co
 | `--listen` | `:5900` | Address and port to listen on |
 | `--upstream` | `http://127.0.0.1:9290` | Base URL of the llama-swap instance |
 | `--config` | `/ai/llama-swap/config.yaml` | Path to llama-swap's `config.yaml` (used by `/opencode`) |
+| `--sessions-dir` | `/ai/sessions` | Directory for synchronized session state (`sessions.db` is created here) |
+| `--default-user` | `user` | Default username used by sync endpoints when auth is not configured |
+| `--isolate-model-user-states` | `false` | Isolate sync state per `/upstream/<model>/` namespace instead of global shared state |
 | `--opencode-hostname` | _(request Host)_ | Custom host (and optional port) for `/opencode` response URLs, e.g. `myserver.local:5900`. Overrides the `Host` header derived from the incoming request. Useful when the proxy is accessed via a different address than clients should use. |
 | `--opencode-include-model-type` | `""` | Comma-separated `metadata.model_type` values to include in `/opencode`. If set by itself, only matching model types are returned. |
 | `--opencode-exclude-model-type` | `""` | Comma-separated `metadata.model_type` values to exclude from `/opencode`. If set by itself, all non-matching model types are returned. |
@@ -77,6 +81,29 @@ Any `aliases` entries are also emitted in the `/opencode` model map, reusing the
 
 Both paths return the same payload. The generated config can be dropped directly into an opencode `config.json` or fetched dynamically with an `extends` entry.
 
+### Sync endpoints (`/api/sessions/<user>/...`)
+
+These endpoints back the injected WebUI sync middleware and can also be used directly:
+
+- `GET /api/sessions/<user>/snapshot?scope=<scope>` — returns merged centralized state for the given user/scope.
+- `POST /api/sessions/<user>/sync?scope=<scope>` — uploads current client state (`localStorage` + IndexedDB), performs merge/upsert (last-write-wins for scalar key-values, union/upsert behavior for record-like structures), and returns merged snapshot.
+- `GET /api/sessions/<user>/ws?scope=<scope>` — WebSocket notification channel for near-real-time cross-client refresh.
+
+Notes:
+
+- `scope` is `global` by default, or `model:<model-id>` when `--isolate-model-user-states` is enabled.
+- Attachments discovered in IndexedDB payloads (base64 blobs/data URLs) are uploaded to server-side storage and replaced with attachment references in centralized JSON state. This keeps centralized truth while avoiding immediate full blob fan-out to all clients.
+
+### `/upstream/<model>/` llama.cpp WebUI injection
+
+For HTML responses detected as llama.cpp WebUI pages, the proxy injects a bootstrap script that:
+
+1. Pulls centralized snapshot before app scripts run.
+2. Applies synchronized `localStorage` and IndexedDB state.
+3. Hooks browser writes to trigger sync uploads.
+4. Opens WebSocket notifications for near-real-time refresh from other clients.
+5. Runs periodic background sync as a safety net.
+
 ### `/*` — transparent pass-through
 
 All other paths are forwarded verbatim to the upstream llama-swap instance via a standard reverse proxy.
@@ -123,6 +150,15 @@ services.llama-swap-proxy = {
   # Optional — defaults to /ai/llama-swap/config.yaml
   # config = "/path/to/llama-swap/config.yaml";
 
+  # Optional — defaults to /ai/sessions (SQLite at /ai/sessions/sessions.db)
+  # sessionsDir = "/ai/sessions";
+
+  # Optional — defaults to "user"
+  # defaultUser = "user";
+
+  # Optional — defaults to false
+  # isolateModelUserStates = false;
+
   # Optional — override hostname used in /opencode response URLs
   # opencodeHostname = "myserver.local:5900";
 
@@ -147,6 +183,9 @@ The `upstream` option automatically tracks `services.llama-swap.port` so a port 
 | `port` | port | `5900` | TCP port to listen on |
 | `upstream` | string | `http://localhost:${services.llama-swap.port}` | Upstream llama-swap URL |
 | `config` | string | `"/ai/llama-swap/config.yaml"` | Path to llama-swap `config.yaml` used by `/opencode` |
+| `sessionsDir` | string | `"/ai/sessions"` | Directory for centralized synchronized state; SQLite file is `sessions.db` inside this directory |
+| `defaultUser` | string | `"user"` | Default session username used when auth is not configured |
+| `isolateModelUserStates` | bool | `false` | Isolate synchronized state by `/upstream/<model>/` when enabled |
 | `opencodeHostname` | string | `""` | Custom host (and optional port) for `/opencode` response URLs, e.g. `"myserver.local:5900"`. Empty string means use the request `Host` header. |
 | `opencodeIncludeModelType` | list of string | `[]` | Whitelist of `metadata.model_type` values eligible for `/opencode` |
 | `opencodeExcludeModelType` | list of string | `[]` | Blacklist of `metadata.model_type` values omitted from `/opencode`; takes priority over include |
@@ -157,7 +196,7 @@ The `upstream` option automatically tracks `services.llama-swap.port` so a port 
 
 ## Building manually
 
-Requires Go 1.22+ and [gomod2nix](https://github.com/nix-community/gomod2nix) if updating dependencies.
+Requires Go 1.25+ and [gomod2nix](https://github.com/nix-community/gomod2nix) if updating dependencies.
 
 ```sh
 go build ./...

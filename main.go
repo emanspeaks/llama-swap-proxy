@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -337,10 +338,30 @@ func newReverseProxy(target string) (*httputil.ReverseProxy, error) {
 	return httputil.NewSingleHostReverseProxy(u), nil
 }
 
+func newInjectingUpstreamProxy(target string, cfg InjectionConfig) (*httputil.ReverseProxy, error) {
+	p, err := newReverseProxy(target)
+	if err != nil {
+		return nil, err
+	}
+	originalDirector := p.Director
+	p.Director = func(req *http.Request) {
+		originalDirector(req)
+		// Avoid compressed HTML payloads so middleware can inject bootstrap script safely.
+		req.Header.Del("Accept-Encoding")
+	}
+	p.ModifyResponse = func(resp *http.Response) error {
+		return injectWebUISync(resp, cfg)
+	}
+	return p, nil
+}
+
 func main() {
 	listen := flag.String("listen", ":5900", "address to listen on (host:port)")
 	upstream := flag.String("upstream", "http://127.0.0.1:9290", "llama-swap base URL")
 	configPath := flag.String("config", "/ai/llama-swap/config.yaml", "path to llama-swap config.yaml")
+	sessionsDir := flag.String("sessions-dir", "/ai/sessions", "directory used for centralized session storage")
+	defaultUser := flag.String("default-user", "user", "default username used when auth is not configured")
+	isolateModelUserStates := flag.Bool("isolate-model-user-states", false, "when true, isolate synchronized state per /upstream/<model>/ namespace")
 	opencodeHostname := flag.String("opencode-hostname", "", "custom host (and optional port) for /opencode endpoint responses, e.g. myserver.local:5900 (overrides request Host header)")
 	opencodeIncludeModelType := flag.String("opencode-include-model-type", "", "comma-separated metadata.model_type values to include in /opencode responses")
 	opencodeExcludeModelType := flag.String("opencode-exclude-model-type", "", "comma-separated metadata.model_type values to exclude from /opencode responses")
@@ -353,6 +374,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create llama-swap proxy: %v", err)
 	}
+
+	injectingUpstreamProxy, err := newInjectingUpstreamProxy(*upstream, InjectionConfig{
+		DefaultUser:           *defaultUser,
+		IsolateModelUserState: *isolateModelUserStates,
+	})
+	if err != nil {
+		log.Fatalf("failed to create injecting upstream proxy: %v", err)
+	}
+
+	sessionsDBPath := filepath.Join(*sessionsDir, "sessions.db")
+	sessionStore, err := NewSessionStore(sessionsDBPath)
+	if err != nil {
+		log.Fatalf("failed to initialize session store: %v", err)
+	}
+	defer func() {
+		if err := sessionStore.Close(); err != nil {
+			log.Printf("session store close failed: %v", err)
+		}
+	}()
+
+	syncServer := NewSyncServer(sessionStore, *defaultUser, *isolateModelUserStates)
 
 	opencodeHandler := func(w http.ResponseWriter, r *http.Request) {
 		scheme := "http"
@@ -527,6 +569,7 @@ func main() {
 
 	http.HandleFunc("/opencode", opencodeHandler)
 	http.HandleFunc("/v1/opencode", opencodeHandler)
+	http.HandleFunc("/api/sessions/", syncServer.HandleSessions)
 
 	http.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		resp, err := http.Get(*upstream + "/v1/models")
@@ -578,6 +621,11 @@ func main() {
 	})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/upstream/") {
+			injectingUpstreamProxy.ServeHTTP(w, r)
+			return
+		}
+
 		if !strings.HasPrefix(r.URL.Path, "/sdcpp") {
 			llamaSwapProxy.ServeHTTP(w, r)
 			return
@@ -604,7 +652,11 @@ func main() {
 	log.Printf("llama-swap-proxy v%s listening on %s", version, *listen)
 	log.Printf("  default upstream: %s", *upstream)
 	log.Printf("  config: %s", *configPath)
+	log.Printf("  sessions dir: %s", *sessionsDir)
+	log.Printf("  default user: %s", *defaultUser)
+	log.Printf("  isolate model user states: %t", *isolateModelUserStates)
 	log.Printf("  /sdcpp/* -> dynamically resolved sd model upstream")
+	log.Printf("  /upstream/* HTML -> llama.cpp webui sync bootstrap injection")
 	if err := http.ListenAndServe(*listen, nil); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
