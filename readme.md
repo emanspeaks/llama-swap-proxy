@@ -16,7 +16,7 @@ A lightweight reverse proxy that sits in front of [llama-swap](https://github.co
 | --- | --- | --- |
 | `--listen` | `:5900` | Address and port to listen on |
 | `--upstream` | `http://127.0.0.1:9290` | Base URL of the llama-swap instance |
-| `--config` | `/ai/llama-swap/config.yaml` | Path to llama-swap's `config.yaml` (used by `/opencode`) |
+| `--config` | `/ai/llama-swap/config.yaml` | Path to llama-swap's `config.yaml` (used by `/opencode` and `/cmd`) |
 | `--sessions-dir` | `/ai/sessions` | Directory for synchronized session state (`sessions.db` is created here) |
 | `--default-user` | `user` | Default username used by sync endpoints when auth is not configured |
 | `--isolate-model-user-states` | `false` | Isolate sync state per `/upstream/<model>/` namespace instead of global shared state |
@@ -80,6 +80,39 @@ models:
 Any `aliases` entries are also emitted in the `/opencode` model map, reusing the same generated settings as the parent model but with the alias name.
 
 Both paths return the same payload. The generated config can be dropped directly into an opencode `config.json` or fetched dynamically with an `extends` entry.
+
+### `GET /cmd` — expanded launch commands by model
+
+Returns a JSON object where each key is a model ID and each value is the fully-expanded command string llama-swap would use to launch that model server.
+
+Expansion behavior mirrors existing macro processing:
+
+1. Starts from each model's `models.<id>.cmd` in `config.yaml`.
+2. Applies global `macros`.
+3. Applies model-level `models.<id>.macros` (model-level values override global values).
+4. Adds `${MODEL_ID}` automatically.
+5. Expands `${env.NAME}` from process environment variables.
+6. Leaves `${PORT}` intentionally unexpanded because runtime port assignment is only known at launch time.
+
+Output formatting:
+
+- Comment-only lines in multiline command templates are removed.
+- Remaining whitespace is normalized into a single-line shell-style command string.
+- If any required `${env.NAME}` variable is missing, the endpoint returns `500`.
+
+Example:
+
+```json
+{
+  "Qwen3.6-27B-UD-Q8_K_XL": "/ai/llama-swap/bin/llama-server --port ${PORT} -ngl 999 --no-mmap --flash-attn on --mlock --jinja --fit on -c 262144 -ub 16384 -b 16384 --cache-type-k q4_0 --cache-type-v q4_0 -m /ai/models/unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-UD-Q8_K_XL.gguf --mmproj /ai/models/unsloth/Qwen3.6-27B-GGUF/mmproj-F16.gguf --alias Qwen3.6-27B-UD-Q8_K_XL --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0 --reasoning on --chat-template-kwargs '{\"preserve_thinking\": true}' --prio 3 --threads 8 --threads-batch 16 --poll 100 --poll-batch 100 -cpent 16384 -ctxcp 40 -np 1 --image-min-tokens 1024"
+}
+```
+
+Quick check:
+
+```sh
+curl -s http://localhost:5900/cmd | jq .
+```
 
 ### Sync endpoints (`/api/sessions/<user>/...`)
 
@@ -182,7 +215,7 @@ The `upstream` option automatically tracks `services.llama-swap.port` so a port 
 | `enable` | bool | `false` | Enable the service |
 | `port` | port | `5900` | TCP port to listen on |
 | `upstream` | string | `http://localhost:${services.llama-swap.port}` | Upstream llama-swap URL |
-| `config` | string | `"/ai/llama-swap/config.yaml"` | Path to llama-swap `config.yaml` used by `/opencode` |
+| `config` | string | `"/ai/llama-swap/config.yaml"` | Path to llama-swap `config.yaml` used by `/opencode` and `/cmd` |
 | `sessionsDir` | string | `"/ai/sessions"` | Directory for centralized synchronized state; SQLite file is `sessions.db` inside this directory |
 | `defaultUser` | string | `"user"` | Default session username used when auth is not configured |
 | `isolateModelUserStates` | bool | `false` | Isolate synchronized state by `/upstream/<model>/` when enabled |
