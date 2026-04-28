@@ -144,6 +144,7 @@ var reFlagReasoningOff = regexp.MustCompile(`(?:^|\s)(?:-rea|--reasoning)(?:\s+|
 var reFlagReasoningOn = regexp.MustCompile(`(?:^|\s)(?:-rea|--reasoning)(?:\s+|=)on(?:\s|$)`)
 var reFlagReasoningFormatNone = regexp.MustCompile(`(?:^|\s)--reasoning-format(?:\s+|=)none(?:\s|$)`)
 var reEnvMacro = regexp.MustCompile(`\$\{env\.([A-Za-z_][A-Za-z0-9_]*)\}`)
+var reWhitespace = regexp.MustCompile(`\s+`)
 
 func expandEnvMacros(s string) (string, error) {
 	missing := ""
@@ -276,6 +277,52 @@ func shouldIncludeOpenCodeModel(modelType string, includeTypes, excludeTypes map
 		}
 		return true
 	}
+}
+
+func buildExpandedModelCmds(configPath string) (map[string]string, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read config: %w", err)
+	}
+
+	var lsCfg LlamaSwapConfigFile
+	if err := yaml.Unmarshal(data, &lsCfg); err != nil {
+		return nil, fmt.Errorf("cannot parse config: %w", err)
+	}
+
+	globalMacros, err := macroMapToStrings(lsCfg.Macros)
+	if err != nil {
+		return nil, fmt.Errorf("invalid global macros: %w", err)
+	}
+
+	out := make(map[string]string, len(lsCfg.Models))
+	for modelID, def := range lsCfg.Models {
+		modelMacros, err := macroMapToStrings(def.Macros)
+		if err != nil {
+			return nil, fmt.Errorf("invalid model macros for %s: %w", modelID, err)
+		}
+
+		macros := make(map[string]string, len(globalMacros)+len(modelMacros)+1)
+		for k, v := range globalMacros {
+			macros[k] = v
+		}
+		for k, v := range modelMacros {
+			macros[k] = v
+		}
+		macros["MODEL_ID"] = modelID
+
+		expandedCmd, err := expandMacros(def.Cmd, macros)
+		if err != nil {
+			return nil, fmt.Errorf("cannot expand macros for %s: %w", modelID, err)
+		}
+
+		// Keep the resulting command shell-like and readable while preserving ${PORT}.
+		expandedCmd = stripCommentOnlyLines(expandedCmd)
+		expandedCmd = reWhitespace.ReplaceAllString(strings.TrimSpace(expandedCmd), " ")
+		out[modelID] = expandedCmd
+	}
+
+	return out, nil
 }
 
 func findRunningSDProxy(upstream string) (modelID, proxyURL string, err error) {
@@ -567,8 +614,30 @@ func main() {
 		}
 	}
 
+	cmdHandler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		cmds, err := buildExpandedModelCmds(*configPath)
+		if err != nil {
+			log.Printf("cmd: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(cmds); err != nil {
+			log.Printf("cmd: encode error: %v", err)
+		}
+	}
+
 	http.HandleFunc("/opencode", opencodeHandler)
 	http.HandleFunc("/v1/opencode", opencodeHandler)
+	http.HandleFunc("/cmd", cmdHandler)
 	http.HandleFunc("/api/sessions/", syncServer.HandleSessions)
 
 	http.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
