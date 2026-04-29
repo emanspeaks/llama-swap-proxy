@@ -114,6 +114,49 @@ Quick check:
 curl -s http://localhost:5900/cmd | jq .
 ```
 
+### `GET /prefill-progress` — poll prefill progress for a streaming request
+
+Returns the latest `prompt_progress` observed in upstream SSE chunks for a
+correlated `(session_id, message_id)` request pair.
+
+Query params:
+
+- `session_id` (required)
+- `message_id` (required)
+
+Response shape:
+
+```json
+{
+  "found": true,
+  "total": 32768,
+  "cache": 16384,
+  "processed": 24576,
+  "time_ms": 8123,
+  "done": false,
+  "updated_at": 1761834600123
+}
+```
+
+When no record exists, the endpoint returns:
+
+- `found: false`
+- numeric fields `0`
+- `done: false`
+- `updated_at: 0`
+
+Example:
+
+```sh
+curl -s "http://localhost:5900/prefill-progress?session_id=my-session&message_id=my-message" | jq .
+```
+
+Notes:
+
+- Progress tracking is in-memory and ephemeral.
+- Entries are evicted automatically after inactivity (default TTL is 180s, with more aggressive eviction for completed streams).
+- Optional debug logging can be enabled with `LLAMA_SWAP_PROXY_PREFILL_DEBUG=1`.
+
 ### Sync endpoints (`/api/sessions/<user>/...`)
 
 These endpoints back the injected WebUI sync middleware and can also be used directly:
