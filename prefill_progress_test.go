@@ -121,7 +121,13 @@ func TestPrefillEndpoint_DefaultAndFound(t *testing.T) {
 
 	// Existing record -> found
 	key := prefillProgressKey{SessionID: "a", MessageID: "b"}
-	tracker.Update(key, 99, 3, 20, 555)
+	raw := map[string]interface{}{
+		"total":     float64(99),
+		"cache":     float64(3),
+		"processed": float64(20),
+		"time_ms":   float64(555),
+	}
+	tracker.Update(key, 99, 3, 20, 555, raw)
 	rr2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/prefill-progress?session_id=a&message_id=b", nil)
 	tracker.HandleGetPrefillProgress(rr2, req2)
@@ -132,6 +138,9 @@ func TestPrefillEndpoint_DefaultAndFound(t *testing.T) {
 	if !resp2.Found || resp2.Total != 99 || resp2.Cache != 3 || resp2.Processed != 20 || resp2.TimeMS != 555 {
 		t.Fatalf("unexpected found response: %+v", resp2)
 	}
+	if resp2.Raw == nil {
+		t.Fatalf("expected raw progress payload for found response: %+v", resp2)
+	}
 }
 
 func TestPrefillEvictionDoneRecord(t *testing.T) {
@@ -139,7 +148,7 @@ func TestPrefillEvictionDoneRecord(t *testing.T) {
 	defer tracker.Close()
 
 	key := prefillProgressKey{SessionID: "evict-s", MessageID: "evict-m"}
-	tracker.Update(key, 1, 0, 1, 1)
+	tracker.Update(key, 1, 0, 1, 1, nil)
 	tracker.MarkDone(key)
 	time.Sleep(10 * time.Millisecond)
 	tracker.evictExpired()

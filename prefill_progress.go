@@ -47,7 +47,7 @@ type PrefillProgressResponse struct {
 	TimeMS    int64                  `json:"time_ms"`
 	Started   bool                   `json:"started"`
 	Done      bool                   `json:"done"`
-	Raw       map[string]interface{} `json:"raw,omitempty"`
+	Raw       map[string]interface{} `json:"raw"`
 	UpdatedAt int64                  `json:"updated_at"`
 }
 
@@ -130,6 +130,9 @@ func (t *PrefillProgressTracker) Update(key prefillProgressKey, total, cache, pr
 	if key.SessionID == "" || key.MessageID == "" {
 		return
 	}
+	if raw == nil {
+		raw = map[string]interface{}{}
+	}
 
 	nowMS := time.Now().UnixMilli()
 	done := total > 0 && processed >= total
@@ -179,6 +182,9 @@ func (t *PrefillProgressTracker) MarkDone(key prefillProgressKey) {
 	nowMS := time.Now().UnixMilli()
 	t.mu.Lock()
 	rec := t.records[key]
+	if rec.Raw == nil {
+		rec.Raw = map[string]interface{}{}
+	}
 	rec.Done = true
 	rec.UpdatedAt = nowMS
 	t.records[key] = rec
