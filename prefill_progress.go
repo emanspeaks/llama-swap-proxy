@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -220,9 +222,10 @@ func attachPrefillProgressTracking(proxy *httputil.ReverseProxy, tracker *Prefil
 			return
 		}
 
-		if tracker.debug {
-			log.Printf("prefill-progress: key created session=%s message=%s", key.SessionID, key.MessageID)
-		}
+		endpoint := fmt.Sprintf("/prefill-progress?session_id=%s&message_id=%s",
+			url.QueryEscape(key.SessionID),
+			url.QueryEscape(key.MessageID))
+		log.Printf("prefill-progress: key created %s", endpoint)
 
 		ctx := context.WithValue(req.Context(), prefillTrackingContextKey{}, prefillTrackingContext{Key: key, TrackSSE: true})
 		*req = *req.WithContext(ctx)
