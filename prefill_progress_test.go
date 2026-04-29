@@ -98,6 +98,9 @@ func TestPrefillTrackingReadCloser_DoneWhenProcessedReachesTotal(t *testing.T) {
 	if !resp.Done {
 		t.Fatal("expected done=true from prompt_progress threshold")
 	}
+	if resp.Started {
+		t.Fatal("expected started=false when done=true")
+	}
 }
 
 func TestPrefillEndpoint_DefaultAndFound(t *testing.T) {
@@ -156,5 +159,81 @@ func TestPrefillEvictionDoneRecord(t *testing.T) {
 	resp := tracker.Get(key)
 	if resp.Found {
 		t.Fatal("expected done record eviction")
+	}
+}
+
+func TestPrefillMarkDoneSetsStartedFalse(t *testing.T) {
+	tracker := NewPrefillProgressTracker(time.Minute, time.Minute, false)
+	defer tracker.Close()
+
+	key := prefillProgressKey{SessionID: "done-s", MessageID: "done-m"}
+	raw := map[string]interface{}{"total": float64(10), "cache": float64(0), "processed": float64(4), "time_ms": float64(100)}
+	tracker.Update(key, 10, 0, 4, 100, raw)
+	tracker.MarkDone(key)
+
+	resp := tracker.Get(key)
+	if !resp.Done {
+		t.Fatal("expected done=true after MarkDone")
+	}
+	if resp.Started {
+		t.Fatal("expected started=false after MarkDone")
+	}
+}
+
+func TestPrefillUpdateReopensDoneRecord(t *testing.T) {
+	tracker := NewPrefillProgressTracker(time.Minute, time.Minute, false)
+	defer tracker.Close()
+
+	key := prefillProgressKey{SessionID: "reopen-s", MessageID: "reopen-m"}
+	rawDone := map[string]interface{}{"total": float64(10), "cache": float64(0), "processed": float64(10), "time_ms": float64(250)}
+	tracker.Update(key, 10, 0, 10, 250, rawDone)
+
+	first := tracker.Get(key)
+	if !first.Done || first.Started {
+		t.Fatalf("expected initial record done=true started=false: %+v", first)
+	}
+
+	rawRestart := map[string]interface{}{"total": float64(10), "cache": float64(0), "processed": float64(0), "time_ms": float64(1)}
+	tracker.Update(key, 10, 0, 0, 1, rawRestart)
+
+	second := tracker.Get(key)
+	if !second.Found {
+		t.Fatal("expected found=true after reopen update")
+	}
+	if second.Done {
+		t.Fatalf("expected done=false after reopen update: %+v", second)
+	}
+	if !second.Started {
+		t.Fatalf("expected started=true after reopen update: %+v", second)
+	}
+}
+
+func TestPrefillUpdateRecreatesEvictedRecord(t *testing.T) {
+	tracker := NewPrefillProgressTracker(time.Minute, 5*time.Millisecond, false)
+	defer tracker.Close()
+
+	key := prefillProgressKey{SessionID: "recreate-s", MessageID: "recreate-m"}
+	rawDone := map[string]interface{}{"total": float64(8), "cache": float64(0), "processed": float64(8), "time_ms": float64(200)}
+	tracker.Update(key, 8, 0, 8, 200, rawDone)
+	time.Sleep(10 * time.Millisecond)
+	tracker.evictExpired()
+
+	missing := tracker.Get(key)
+	if missing.Found {
+		t.Fatalf("expected record evicted before recreate: %+v", missing)
+	}
+
+	rawNew := map[string]interface{}{"total": float64(8), "cache": float64(0), "processed": float64(2), "time_ms": float64(25)}
+	tracker.Update(key, 8, 0, 2, 25, rawNew)
+
+	recreated := tracker.Get(key)
+	if !recreated.Found {
+		t.Fatal("expected found=true after recreate update")
+	}
+	if recreated.Done {
+		t.Fatalf("expected done=false for recreated in-progress record: %+v", recreated)
+	}
+	if !recreated.Started {
+		t.Fatalf("expected started=true for recreated in-progress record: %+v", recreated)
 	}
 }

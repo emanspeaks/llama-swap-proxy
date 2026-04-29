@@ -148,7 +148,10 @@ func (t *PrefillProgressTracker) Update(key prefillProgressKey, total, cache, pr
 	if isStartSignal {
 		rec.Total = total
 		rec.Cache = cache
+		rec.Processed = processed
+		rec.TimeMS = timeMS
 		rec.Raw = raw
+		rec.Done = false
 		rec.Started = true
 		rec.UpdatedAt = nowMS
 		t.records[key] = rec
@@ -163,8 +166,12 @@ func (t *PrefillProgressTracker) Update(key prefillProgressKey, total, cache, pr
 	rec.Processed = processed
 	rec.TimeMS = timeMS
 	rec.Raw = raw
-	rec.Started = true
-	rec.Done = rec.Done || done
+	rec.Done = done
+	if rec.Done {
+		rec.Started = false
+	} else {
+		rec.Started = true
+	}
 	rec.UpdatedAt = nowMS
 	t.records[key] = rec
 	t.mu.Unlock()
@@ -186,6 +193,7 @@ func (t *PrefillProgressTracker) MarkDone(key prefillProgressKey) {
 		rec.Raw = map[string]interface{}{}
 	}
 	rec.Done = true
+	rec.Started = false
 	rec.UpdatedAt = nowMS
 	t.records[key] = rec
 	t.mu.Unlock()
