@@ -325,56 +325,11 @@ func buildExpandedModelCmds(configPath string) (map[string]string, error) {
 	return out, nil
 }
 
-func findRunningSDProxy(upstream string) (modelID, proxyURL string, err error) {
-	resp, err := http.Get(upstream + "/running")
-	if err != nil {
-		return "", "", fmt.Errorf("fetching /running: %w", err)
+func findRunningSDProxy(guesser *BackendGuesser) (modelID, proxyURL string, err error) {
+	if guesser == nil {
+		return "", "", fmt.Errorf("backend guesser is nil")
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("reading /running: %w", err)
-	}
-	var running RunningResponse
-	if err := json.Unmarshal(body, &running); err != nil {
-		return "", "", fmt.Errorf("parsing /running: %w", err)
-	}
-
-	if len(running.Running) == 0 {
-		return "", "", fmt.Errorf("no models currently running")
-	}
-
-	runningByModel := make(map[string]string)
-	for _, m := range running.Running {
-		runningByModel[m.Model] = m.Proxy
-	}
-
-	resp2, err := http.Get(upstream + "/v1/models")
-	if err != nil {
-		return "", "", fmt.Errorf("fetching /v1/models: %w", err)
-	}
-	defer resp2.Body.Close()
-	body2, err := io.ReadAll(resp2.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("reading /v1/models: %w", err)
-	}
-	var models ModelsResponse
-	if err := json.Unmarshal(body2, &models); err != nil {
-		return "", "", fmt.Errorf("parsing /v1/models: %w", err)
-	}
-
-	for _, entry := range models.Data {
-		if entry.Meta.LlamaSwap.ModelType != "sd" {
-			continue
-		}
-		proxy, ok := runningByModel[entry.ID]
-		if !ok {
-			continue
-		}
-		return entry.ID, proxy, nil
-	}
-
-	return "", "", fmt.Errorf("no running sd model found")
+	return guesser.FindRunningSDProxy()
 }
 
 func newReverseProxy(target string) (*httputil.ReverseProxy, error) {
@@ -409,6 +364,7 @@ func main() {
 	sessionsDir := flag.String("sessions-dir", "/ai/sessions", "directory used for centralized session storage")
 	defaultUser := flag.String("default-user", "user", "default username used when auth is not configured")
 	isolateModelUserStates := flag.Bool("isolate-model-user-states", false, "when true, isolate synchronized state per /upstream/<model>/ namespace")
+	disableReturnProgressInjection := flag.Bool("disable-return-progress-injection", false, "when true, skip automatic injection of return_progress:true into streaming llama.cpp requests")
 	opencodeHostname := flag.String("opencode-hostname", "", "custom host (and optional port) for /opencode endpoint responses, e.g. myserver.local:5900 (overrides request Host header)")
 	opencodeIncludeModelType := flag.String("opencode-include-model-type", "", "comma-separated metadata.model_type values to include in /opencode responses")
 	opencodeExcludeModelType := flag.String("opencode-exclude-model-type", "", "comma-separated metadata.model_type values to exclude from /opencode responses")
@@ -416,6 +372,7 @@ func main() {
 
 	includeModelTypes := parseListFlag(*opencodeIncludeModelType)
 	excludeModelTypes := parseListFlag(*opencodeExcludeModelType)
+	backendGuesser := NewBackendGuesser(*upstream)
 
 	llamaSwapProxy, err := newReverseProxy(*upstream)
 	if err != nil {
@@ -425,6 +382,7 @@ func main() {
 	injectingUpstreamProxy, err := newInjectingUpstreamProxy(*upstream, InjectionConfig{
 		DefaultUser:           *defaultUser,
 		IsolateModelUserState: *isolateModelUserStates,
+		BackendGuesser:        backendGuesser,
 	})
 	if err != nil {
 		log.Fatalf("failed to create injecting upstream proxy: %v", err)
@@ -696,11 +654,16 @@ func main() {
 		}
 
 		if !strings.HasPrefix(r.URL.Path, "/sdcpp") {
+			// Inject return_progress: true into streaming llama.cpp requests so
+			// clients receive prefill-progress SSE chunks without per-request config.
+			if !*disableReturnProgressInjection {
+				maybeInjectReturnProgress(r, backendGuesser)
+			}
 			llamaSwapProxy.ServeHTTP(w, r)
 			return
 		}
 
-		modelID, proxyTarget, err := findRunningSDProxy(*upstream)
+		modelID, proxyTarget, err := findRunningSDProxy(backendGuesser)
 		if err != nil {
 			log.Printf("sdcpp proxy lookup failed: %v", err)
 			http.Error(w, fmt.Sprintf("no running sd model: %v", err), http.StatusServiceUnavailable)
@@ -724,6 +687,7 @@ func main() {
 	log.Printf("  sessions dir: %s", *sessionsDir)
 	log.Printf("  default user: %s", *defaultUser)
 	log.Printf("  isolate model user states: %t", *isolateModelUserStates)
+	log.Printf("  return_progress injection: %t", !*disableReturnProgressInjection)
 	log.Printf("  /sdcpp/* -> dynamically resolved sd model upstream")
 	log.Printf("  /upstream/* HTML -> llama.cpp webui sync bootstrap injection")
 	if err := http.ListenAndServe(*listen, nil); err != nil {
