@@ -33,18 +33,22 @@ type prefillProgressRecord struct {
 	Cache     int64
 	Processed int64
 	TimeMS    int64
+	Raw       map[string]interface{}
+	Started   bool
 	Done      bool
 	UpdatedAt int64 // unix ms
 }
 
 type PrefillProgressResponse struct {
-	Found     bool  `json:"found"`
-	Total     int64 `json:"total"`
-	Cache     int64 `json:"cache"`
-	Processed int64 `json:"processed"`
-	TimeMS    int64 `json:"time_ms"`
-	Done      bool  `json:"done"`
-	UpdatedAt int64 `json:"updated_at"`
+	Found     bool                   `json:"found"`
+	Total     int64                  `json:"total"`
+	Cache     int64                  `json:"cache"`
+	Processed int64                  `json:"processed"`
+	TimeMS    int64                  `json:"time_ms"`
+	Started   bool                   `json:"started"`
+	Done      bool                   `json:"done"`
+	Raw       map[string]interface{} `json:"raw"`
+	UpdatedAt int64                  `json:"updated_at"`
 }
 
 type PrefillProgressTracker struct {
@@ -122,20 +126,44 @@ func (t *PrefillProgressTracker) evictExpired() {
 	}
 }
 
-func (t *PrefillProgressTracker) Update(key prefillProgressKey, total, cache, processed, timeMS int64) {
+func (t *PrefillProgressTracker) Update(key prefillProgressKey, total, cache, processed, timeMS int64, raw map[string]interface{}) {
 	if key.SessionID == "" || key.MessageID == "" {
 		return
+	}
+	if raw == nil {
+		raw = map[string]interface{}{}
 	}
 
 	nowMS := time.Now().UnixMilli()
 	done := total > 0 && processed >= total
 
+	// The first SSE event llama.cpp sends is a "started" signal emitted before any
+	// llama_decode() call; at that point processed == cache (no new tokens decoded yet).
+	// We surface this as started=true without updating the progress numbers, unless it
+	// also marks completion (full cache hit where processed == total).
+	isStartSignal := processed == cache && !done
+
 	t.mu.Lock()
 	rec := t.records[key]
+	if isStartSignal {
+		rec.Total = total
+		rec.Cache = cache
+		rec.Raw = raw
+		rec.Started = true
+		rec.UpdatedAt = nowMS
+		t.records[key] = rec
+		t.mu.Unlock()
+		if t.debug {
+			log.Printf("prefill-progress: started session=%s message=%s total=%d cache=%d", key.SessionID, key.MessageID, total, cache)
+		}
+		return
+	}
 	rec.Total = total
 	rec.Cache = cache
 	rec.Processed = processed
 	rec.TimeMS = timeMS
+	rec.Raw = raw
+	rec.Started = true
 	rec.Done = rec.Done || done
 	rec.UpdatedAt = nowMS
 	t.records[key] = rec
@@ -154,6 +182,9 @@ func (t *PrefillProgressTracker) MarkDone(key prefillProgressKey) {
 	nowMS := time.Now().UnixMilli()
 	t.mu.Lock()
 	rec := t.records[key]
+	if rec.Raw == nil {
+		rec.Raw = map[string]interface{}{}
+	}
 	rec.Done = true
 	rec.UpdatedAt = nowMS
 	t.records[key] = rec
@@ -182,7 +213,9 @@ func (t *PrefillProgressTracker) Get(key prefillProgressKey) PrefillProgressResp
 		Cache:     rec.Cache,
 		Processed: rec.Processed,
 		TimeMS:    rec.TimeMS,
+		Started:   rec.Started,
 		Done:      rec.Done,
+		Raw:       rec.Raw,
 		UpdatedAt: rec.UpdatedAt,
 	}
 }
@@ -461,7 +494,7 @@ func (t *prefillTrackingReadCloser) finalizeEvent() {
 	}
 
 	if t.tracker != nil {
-		t.tracker.Update(t.key, total, cache, processed, timeMS)
+		t.tracker.Update(t.key, total, cache, processed, timeMS, pp)
 	}
 }
 

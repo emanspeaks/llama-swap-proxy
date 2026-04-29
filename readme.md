@@ -151,10 +151,26 @@ Response shape:
   "cache": 16384,
   "processed": 24576,
   "time_ms": 8123,
+  "started": true,
   "done": false,
   "updated_at": 1761834600123
 }
 ```
+
+Field semantics:
+
+- `started` — `true` once llama.cpp has picked up the request and emitted its initial signal (before any tokens are decoded). Use this to distinguish "queued" from "in progress".
+- `processed` — cumulative number of prompt tokens that have been decoded so far. Only populated after the first real decode batch; `0` while `started=false` or when processing has not yet begun.
+- `done` — `true` once the full prompt has been processed (or the stream closed).
+
+Typical state progression:
+
+| `started` | `processed` | `done` | Meaning |
+| --- | --- | --- | --- |
+| `false` | `0` | `false` | Not yet picked up by llama.cpp |
+| `true` | `0` | `false` | Picked up; first batch not yet decoded |
+| `true` | `> 0` | `false` | Decoding in progress |
+| `true` | `= total` | `true` | Prompt fully processed |
 
 When no record exists, the endpoint returns:
 
