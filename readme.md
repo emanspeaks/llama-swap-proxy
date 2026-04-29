@@ -114,10 +114,28 @@ Quick check:
 curl -s http://localhost:5900/cmd | jq .
 ```
 
-### `GET /prefill-progress` — poll prefill progress for a streaming request
+### `GET /prefill-progress` and `GET /v1/prefill-progress` — poll prefill progress for a streaming request
 
 Returns the latest `prompt_progress` observed in upstream SSE chunks for a
 correlated `(session_id, message_id)` request pair.
+
+For an incoming streaming request to be tracked, the proxy resolves
+correlation keys in this order:
+
+1. HTTP headers: `x-opencode-session-id`, `x-opencode-message-id`
+2. Fallback to request JSON body `headers` object with the same keys
+
+Example tracked request shape:
+
+```json
+{
+  "stream": true,
+  "headers": {
+    "x-opencode-session-id": "my-session",
+    "x-opencode-message-id": "my-message"
+  }
+}
+```
 
 Query params:
 
@@ -150,6 +168,8 @@ Example:
 ```sh
 curl -s "http://localhost:5900/prefill-progress?session_id=my-session&message_id=my-message" | jq .
 ```
+
+`/v1/prefill-progress` returns the same payload and accepts the same query params.
 
 Notes:
 

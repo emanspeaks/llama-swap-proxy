@@ -600,6 +600,7 @@ func main() {
 	http.HandleFunc("/v1/opencode", opencodeHandler)
 	http.HandleFunc("/cmd", cmdHandler)
 	http.HandleFunc("/prefill-progress", prefillTracker.HandleGetPrefillProgress)
+	http.HandleFunc("/v1/prefill-progress", prefillTracker.HandleGetPrefillProgress)
 	http.HandleFunc("/api/sessions/", syncServer.HandleSessions)
 
 	http.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
