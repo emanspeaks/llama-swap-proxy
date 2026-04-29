@@ -373,11 +373,14 @@ func main() {
 	includeModelTypes := parseListFlag(*opencodeIncludeModelType)
 	excludeModelTypes := parseListFlag(*opencodeExcludeModelType)
 	backendGuesser := NewBackendGuesser(*upstream)
+	prefillTracker := NewPrefillProgressTracker(prefillDefaultTTL, prefillDoneTTL, envBool(prefillDebugEnvName))
+	defer prefillTracker.Close()
 
 	llamaSwapProxy, err := newReverseProxy(*upstream)
 	if err != nil {
 		log.Fatalf("failed to create llama-swap proxy: %v", err)
 	}
+	attachPrefillProgressTracking(llamaSwapProxy, prefillTracker)
 
 	injectingUpstreamProxy, err := newInjectingUpstreamProxy(*upstream, InjectionConfig{
 		DefaultUser:           *defaultUser,
@@ -596,6 +599,7 @@ func main() {
 	http.HandleFunc("/opencode", opencodeHandler)
 	http.HandleFunc("/v1/opencode", opencodeHandler)
 	http.HandleFunc("/cmd", cmdHandler)
+	http.HandleFunc("/prefill-progress", prefillTracker.HandleGetPrefillProgress)
 	http.HandleFunc("/api/sessions/", syncServer.HandleSessions)
 
 	http.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
