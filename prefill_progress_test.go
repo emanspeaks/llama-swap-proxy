@@ -16,10 +16,10 @@ type nopCloseReader struct {
 
 func (n nopCloseReader) Close() error { return nil }
 
-func TestDerivePrefillCorrelationFromRequest_HeadersPreferred(t *testing.T) {
-	r, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"stream":true,"session_id":"body-s","message_id":"body-m"}`))
-	r.Header.Set("x-opencode-session-id", "hdr-s")
-	r.Header.Set("x-opencode-message-id", "hdr-m")
+func TestDerivePrefillCorrelationFromRequest_HTTPHeadersPreferred(t *testing.T) {
+	r, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"stream":true,"headers":{"x-opencode-session-id":"json-s","x-opencode-message-id":"json-m"}}`))
+	r.Header.Set("x-opencode-session-id", "http-s")
+	r.Header.Set("x-opencode-message-id", "http-m")
 
 	key, trackSSE, ok := derivePrefillCorrelationFromRequest(r)
 	if !ok {
@@ -28,23 +28,35 @@ func TestDerivePrefillCorrelationFromRequest_HeadersPreferred(t *testing.T) {
 	if !trackSSE {
 		t.Fatal("expected trackSSE=true")
 	}
-	if key.SessionID != "hdr-s" || key.MessageID != "hdr-m" {
+	if key.SessionID != "http-s" || key.MessageID != "http-m" {
 		t.Fatalf("unexpected key: %+v", key)
 	}
 }
 
-func TestDerivePrefillCorrelationFromRequest_BodyFallback(t *testing.T) {
-	r, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"stream":true,"session_id":"s1","message_id":"m1"}`))
+func TestDerivePrefillCorrelationFromRequest_PayloadHeadersFallback(t *testing.T) {
+	r, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"stream":true,"headers":{"x-opencode-session-id":"json-s","x-opencode-message-id":"json-m"}}`))
 
 	key, trackSSE, ok := derivePrefillCorrelationFromRequest(r)
 	if !ok {
-		t.Fatal("expected correlation key from body")
+		t.Fatal("expected correlation key from payload headers")
 	}
 	if !trackSSE {
 		t.Fatal("expected trackSSE=true")
 	}
-	if key.SessionID != "s1" || key.MessageID != "m1" {
+	if key.SessionID != "json-s" || key.MessageID != "json-m" {
 		t.Fatalf("unexpected key: %+v", key)
+	}
+}
+
+func TestDerivePrefillCorrelationFromRequest_RequiresHTTPOrPayloadHeaders(t *testing.T) {
+	r, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"stream":true,"session_id":"s1","message_id":"m1"}`))
+
+	key, trackSSE, ok := derivePrefillCorrelationFromRequest(r)
+	if !trackSSE {
+		t.Fatal("expected trackSSE=true")
+	}
+	if ok {
+		t.Fatalf("expected no correlation key, got %+v", key)
 	}
 }
 

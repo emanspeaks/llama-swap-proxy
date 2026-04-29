@@ -262,18 +262,22 @@ func derivePrefillCorrelationFromRequest(r *http.Request) (key prefillProgressKe
 		return prefillProgressKey{}, false, false
 	}
 
-	// Prefer headers when present.
 	sessionID := strings.TrimSpace(r.Header.Get("x-opencode-session-id"))
 	messageID := strings.TrimSpace(r.Header.Get("x-opencode-message-id"))
 
 	payload, parsed := readJSONRequestBodyAsMap(r)
 	if parsed {
 		trackSSE = mapBool(payload, "stream")
-		if sessionID == "" {
-			sessionID = mapString(payload, "session_id", "sessionId")
-		}
-		if messageID == "" {
-			messageID = mapString(payload, "message_id", "messageId")
+		if sessionID == "" || messageID == "" {
+			headers := mapMap(payload, "headers")
+			if headers != nil {
+				if sessionID == "" {
+					sessionID = mapString(headers, "x-opencode-session-id")
+				}
+				if messageID == "" {
+					messageID = mapString(headers, "x-opencode-message-id")
+				}
+			}
 		}
 	}
 
@@ -323,6 +327,21 @@ func mapString(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func mapMap(m map[string]interface{}, key string) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	child, ok := v.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	return child
 }
 
 func mapBool(m map[string]interface{}, key string) bool {
