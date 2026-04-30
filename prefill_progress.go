@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -61,6 +59,17 @@ type PrefillProgressTracker struct {
 
 	stopJanitor chan struct{}
 	janitorDone chan struct{}
+
+	notifyMu sync.RWMutex
+	notifyFn func(sessionID string, rec prefillProgressRecord)
+}
+
+// SetNotifyFunc registers a callback invoked (outside any lock) whenever
+// prefill state changes.  It replaces any previously registered callback.
+func (t *PrefillProgressTracker) SetNotifyFunc(fn func(sessionID string, rec prefillProgressRecord)) {
+	t.notifyMu.Lock()
+	t.notifyFn = fn
+	t.notifyMu.Unlock()
 }
 
 type prefillTrackingContext struct {
@@ -159,6 +168,12 @@ func (t *PrefillProgressTracker) Update(key prefillProgressKey, total, cache, pr
 		if t.debug {
 			log.Printf("prefill-progress: started session=%s message=%s total=%d cache=%d", key.SessionID, key.MessageID, total, cache)
 		}
+		t.notifyMu.RLock()
+		fn := t.notifyFn
+		t.notifyMu.RUnlock()
+		if fn != nil {
+			fn(key.SessionID, rec)
+		}
 		return
 	}
 	rec.Total = total
@@ -178,6 +193,12 @@ func (t *PrefillProgressTracker) Update(key prefillProgressKey, total, cache, pr
 
 	if t.debug {
 		log.Printf("prefill-progress: update session=%s message=%s total=%d cache=%d processed=%d time_ms=%d done=%t", key.SessionID, key.MessageID, total, cache, processed, timeMS, rec.Done)
+	}
+	t.notifyMu.RLock()
+	fn := t.notifyFn
+	t.notifyMu.RUnlock()
+	if fn != nil {
+		fn(key.SessionID, rec)
 	}
 }
 
@@ -200,6 +221,12 @@ func (t *PrefillProgressTracker) MarkDone(key prefillProgressKey) {
 
 	if t.debug {
 		log.Printf("prefill-progress: done session=%s message=%s", key.SessionID, key.MessageID)
+	}
+	t.notifyMu.RLock()
+	fn := t.notifyFn
+	t.notifyMu.RUnlock()
+	if fn != nil {
+		fn(key.SessionID, rec)
 	}
 }
 
@@ -228,27 +255,6 @@ func (t *PrefillProgressTracker) Get(key prefillProgressKey) PrefillProgressResp
 	}
 }
 
-func (t *PrefillProgressTracker) HandleGetPrefillProgress(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	key := prefillProgressKey{
-		SessionID: strings.TrimSpace(r.URL.Query().Get("session_id")),
-		MessageID: strings.TrimSpace(r.URL.Query().Get("message_id")),
-	}
-	resp := t.Get(key)
-	if t.debug {
-		log.Printf("prefill-progress: endpoint hit session=%s message=%s found=%t", key.SessionID, key.MessageID, resp.Found)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("prefill-progress: encode error: %v", err)
-	}
-}
-
 func attachPrefillProgressTracking(proxy *httputil.ReverseProxy, tracker *PrefillProgressTracker) {
 	if proxy == nil || tracker == nil {
 		return
@@ -263,10 +269,7 @@ func attachPrefillProgressTracking(proxy *httputil.ReverseProxy, tracker *Prefil
 			return
 		}
 
-		endpoint := fmt.Sprintf("/prefill-progress?session_id=%s&message_id=%s",
-			url.QueryEscape(key.SessionID),
-			url.QueryEscape(key.MessageID))
-		log.Printf("prefill-progress: key created %s", endpoint)
+		log.Printf("prefill-progress: key created session=%s message=%s", key.SessionID, key.MessageID)
 
 		ctx := context.WithValue(req.Context(), prefillTrackingContextKey{}, prefillTrackingContext{Key: key, TrackSSE: true})
 		*req = *req.WithContext(ctx)

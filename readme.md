@@ -114,81 +114,52 @@ Quick check:
 curl -s http://localhost:5900/cmd | jq .
 ```
 
-### `GET /prefill-progress` and `GET /v1/prefill-progress` — poll prefill progress for a streaming request
+### `GET /prefill-ws` and `GET /v1/prefill-ws` — WebSocket push for prefill progress
 
-Returns the latest `prompt_progress` observed in upstream SSE chunks for a
-correlated `(session_id, message_id)` request pair.
+Upgrades to WebSocket and pushes JSON updates to all connected clients whenever
+prefill state changes for any active streaming request.
 
-For an incoming streaming request to be tracked, the proxy resolves
-correlation keys in this order:
+For an incoming streaming request to be tracked, the proxy resolves correlation
+keys in this order:
 
 1. HTTP headers: `x-opencode-session-id`, `x-opencode-message-id`
 2. Fallback to request JSON body `headers` object with the same keys
 
-Example tracked request shape:
+The `session_id` included in push messages comes from
+`x-opencode-session-id` (or JSON `headers` fallback).
+
+Progress update shape:
 
 ```json
 {
-  "stream": true,
-  "headers": {
-    "x-opencode-session-id": "my-session",
-    "x-opencode-message-id": "my-message"
-  }
-}
-```
-
-Query params:
-
-- `session_id` (required)
-- `message_id` (required)
-
-Response shape:
-
-```json
-{
-  "found": true,
-  "total": 32768,
-  "cache": 16384,
-  "processed": 24576,
-  "time_ms": 8123,
+  "session_id": "my-session",
+  "total": 1024,
+  "cache": 200,
+  "processed": 600,
+  "time_ms": 450,
   "started": true,
-  "done": false,
-  "updated_at": 1761834600123
+  "done": false
 }
 ```
 
-Field semantics:
+Done signal shape:
 
-- `started` — `true` once llama.cpp has picked up the request and emitted its initial signal (before any tokens are decoded). Use this to distinguish "queued" from "in progress".
-- `processed` — cumulative number of prompt tokens that have been decoded so far. Only populated after the first real decode batch; `0` while `started=false` or when processing has not yet begun.
-- `done` — `true` once the full prompt has been processed (or the stream closed).
-
-Typical state progression:
-
-| `started` | `processed` | `done` | Meaning |
-| --- | --- | --- | --- |
-| `false` | `0` | `false` | Not yet picked up by llama.cpp |
-| `true` | `0` | `false` | Picked up; first batch not yet decoded |
-| `true` | `> 0` | `false` | Decoding in progress |
-| `true` | `= total` | `true` | Prompt fully processed |
-
-When no record exists, the endpoint returns:
-
-- `found: false`
-- numeric fields `0`
-- `done: false`
-- `updated_at: 0`
-
-Example:
-
-```sh
-curl -s "http://localhost:5900/prefill-progress?session_id=my-session&message_id=my-message" | jq .
+```json
+{
+  "session_id": "my-session",
+  "total": 0,
+  "cache": 0,
+  "processed": 0,
+  "time_ms": 0,
+  "started": false,
+  "done": true
+}
 ```
-
-`/v1/prefill-progress` returns the same payload and accepts the same query params.
 
 Notes:
 
+- WebSocket is server-push only; clients do not need to send any messages.
+- Multiple clients can be connected simultaneously; each gets the same broadcasts.
 - Progress tracking is in-memory and ephemeral.
 - Entries are evicted automatically after inactivity (default TTL is 180s, with more aggressive eviction for completed streams).
 - Optional debug logging can be enabled with `LLAMA_SWAP_PROXY_PREFILL_DEBUG=1`.
