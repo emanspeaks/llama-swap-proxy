@@ -2,10 +2,8 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -100,49 +98,6 @@ func TestPrefillTrackingReadCloser_DoneWhenProcessedReachesTotal(t *testing.T) {
 	}
 	if resp.Started {
 		t.Fatal("expected started=false when done=true")
-	}
-}
-
-func TestPrefillEndpoint_DefaultAndFound(t *testing.T) {
-	tracker := NewPrefillProgressTracker(time.Minute, time.Minute, false)
-	defer tracker.Close()
-
-	// Missing record -> defaults
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/prefill-progress?session_id=a&message_id=b", nil)
-	tracker.HandleGetPrefillProgress(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("unexpected status: %d", rr.Code)
-	}
-	var resp PrefillProgressResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if resp.Found || resp.Total != 0 || resp.Cache != 0 || resp.Processed != 0 || resp.TimeMS != 0 || resp.Done || resp.UpdatedAt != 0 {
-		t.Fatalf("unexpected default response: %+v", resp)
-	}
-
-	// Existing record -> found
-	key := prefillProgressKey{SessionID: "a", MessageID: "b"}
-	raw := map[string]interface{}{
-		"total":     float64(99),
-		"cache":     float64(3),
-		"processed": float64(20),
-		"time_ms":   float64(555),
-	}
-	tracker.Update(key, 99, 3, 20, 555, raw)
-	rr2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodGet, "/prefill-progress?session_id=a&message_id=b", nil)
-	tracker.HandleGetPrefillProgress(rr2, req2)
-	var resp2 PrefillProgressResponse
-	if err := json.Unmarshal(rr2.Body.Bytes(), &resp2); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !resp2.Found || resp2.Total != 99 || resp2.Cache != 3 || resp2.Processed != 20 || resp2.TimeMS != 555 {
-		t.Fatalf("unexpected found response: %+v", resp2)
-	}
-	if resp2.Raw == nil {
-		t.Fatalf("expected raw progress payload for found response: %+v", resp2)
 	}
 }
 

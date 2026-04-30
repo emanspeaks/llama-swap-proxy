@@ -376,6 +376,23 @@ func main() {
 	prefillTracker := NewPrefillProgressTracker(prefillDefaultTTL, prefillDoneTTL, envBool(prefillDebugEnvName))
 	defer prefillTracker.Close()
 
+	wsHub := NewPrefillWSHub()
+	prefillTracker.SetNotifyFunc(func(sessionID string, rec prefillProgressRecord) {
+		if rec.Done {
+			wsHub.BroadcastDone(sessionID)
+			return
+		}
+		wsHub.Broadcast(PrefillWSPush{
+			SessionID: sessionID,
+			Total:     rec.Total,
+			Cache:     rec.Cache,
+			Processed: rec.Processed,
+			TimeMS:    rec.TimeMS,
+			Started:   rec.Started,
+			Done:      rec.Done,
+		})
+	})
+
 	llamaSwapProxy, err := newReverseProxy(*upstream)
 	if err != nil {
 		log.Fatalf("failed to create llama-swap proxy: %v", err)
@@ -599,8 +616,8 @@ func main() {
 	http.HandleFunc("/opencode", opencodeHandler)
 	http.HandleFunc("/v1/opencode", opencodeHandler)
 	http.HandleFunc("/cmd", cmdHandler)
-	http.HandleFunc("/prefill-progress", prefillTracker.HandleGetPrefillProgress)
-	http.HandleFunc("/v1/prefill-progress", prefillTracker.HandleGetPrefillProgress)
+	http.HandleFunc("/prefill-ws", wsHub.HandlePrefillWS)
+	http.HandleFunc("/v1/prefill-ws", wsHub.HandlePrefillWS)
 	http.HandleFunc("/api/sessions/", syncServer.HandleSessions)
 
 	http.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
