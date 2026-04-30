@@ -44,11 +44,13 @@ func NewPrefillWSHub() *PrefillWSHub {
 	}
 }
 
-// Broadcast encodes msg as JSON and sends it to every connected client.
-// Slow clients that cannot accept the message before the send buffer fills
-// are silently skipped — they will catch the next update.
-func (h *PrefillWSHub) Broadcast(msg PrefillWSPush) {
-	data, err := json.Marshal(msg)
+type prefillWSDonePush struct {
+	SessionID string `json:"session_id"`
+	Done      bool   `json:"done"`
+}
+
+func (h *PrefillWSHub) broadcastJSON(v interface{}) {
+	data, err := json.Marshal(v)
 	if err != nil {
 		log.Printf("prefill-ws: marshal error: %v", err)
 		return
@@ -62,6 +64,18 @@ func (h *PrefillWSHub) Broadcast(msg PrefillWSPush) {
 			// send buffer full — drop this update for the slow client
 		}
 	}
+}
+
+// Broadcast encodes msg as JSON and sends it to every connected client.
+// Slow clients that cannot accept the message before the send buffer fills
+// are silently skipped — they will catch the next update.
+func (h *PrefillWSHub) Broadcast(msg PrefillWSPush) {
+	h.broadcastJSON(msg)
+}
+
+// BroadcastDone emits the completion signal in minimal form for plugin compatibility.
+func (h *PrefillWSHub) BroadcastDone(sessionID string) {
+	h.broadcastJSON(prefillWSDonePush{SessionID: sessionID, Done: true})
 }
 
 func (h *PrefillWSHub) register(c *prefillWSClient) {

@@ -378,6 +378,10 @@ func main() {
 
 	wsHub := NewPrefillWSHub()
 	prefillTracker.SetNotifyFunc(func(sessionID string, rec prefillProgressRecord) {
+		if rec.Done {
+			wsHub.BroadcastDone(sessionID)
+			return
+		}
 		wsHub.Broadcast(PrefillWSPush{
 			SessionID: sessionID,
 			Total:     rec.Total,

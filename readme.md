@@ -147,11 +147,6 @@ Done signal shape:
 ```json
 {
   "session_id": "my-session",
-  "total": 0,
-  "cache": 0,
-  "processed": 0,
-  "time_ms": 0,
-  "started": false,
   "done": true
 }
 ```
